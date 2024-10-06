@@ -8,6 +8,88 @@
 #include <memory.h>
 #include <stdio.h>
 
+#define SENTENCE_LEN 10000
+
+enum user_status {
+	CONNECTED,
+	USER,
+	PASS,
+	PORT,
+	PASV
+};
+
+int connect_to(int* sockfd, char* ip, int port) {
+	if ((*sockfd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)) == -1) {
+		printf("Error socket(): %s(%d)\n", strerror(errno), errno);
+		return 1;
+	}
+
+	struct sockaddr_in addr;
+	memset(&addr, 0, sizeof(addr));
+	addr.sin_family = AF_INET;
+	addr.sin_port = htons(port);
+	addr.sin_addr.s_addr = inet_addr(ip);
+
+	if (connect(*sockfd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+		printf("Error connect(): %s(%d)\n", strerror(errno), errno);
+		close(*sockfd);
+		return 1;
+	}
+
+	return 0;
+}
+
+int listen_at(int* sockfd, int port) {
+	if ((*sockfd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)) == -1) {
+		printf("Error socket(): %s(%d)\n", strerror(errno), errno);
+		return 1;
+	}
+
+	struct sockaddr_in addr;
+	memset(&addr, 0, sizeof(addr));
+	addr.sin_family = AF_INET;
+	addr.sin_port = htons(port);
+	addr.sin_addr.s_addr = htonl(INADDR_ANY);
+
+	if (bind(*sockfd, (struct sockaddr*)&addr, sizeof(addr)) == -1) {
+		printf("Error bind(): %s(%d)\n", strerror(errno), errno);
+		close(*sockfd);
+		return 1;
+	}
+
+	if (listen(*sockfd, 5) == -1) {
+		printf("Error listen(): %s(%d)\n", strerror(errno), errno);
+		close(*sockfd);
+		return 1;
+	}
+
+	return 0;
+}
+
+
+int get_response(int sockfd) { //TODO
+	char sentence[SENTENCE_LEN];
+	int p = 0;
+	while (1) {
+		int n = read(sockfd, sentence + p, SENTENCE_LEN - p);
+		if (n < 0) {
+			printf("Error read(): %s(%d)\n", strerror(errno), errno);
+			return -1;
+		} else if (n == 0) {
+			break; //TODO
+		} else {
+			p += n;
+			if (sentence[p - 2] == '\r' && sentence[p - 1] == '\n') {
+				sentence[p - 2] = '\0';
+				break;
+			}
+		}
+	}
+
+	printf("FROM SERVER: %s\n", sentence);
+	return 0;
+}
+
 int main(int argc, char **argv) {
 	int sockfd;
 	struct sockaddr_in addr;
@@ -15,68 +97,46 @@ int main(int argc, char **argv) {
 	int len;
 	int p;
 
-	//´´½¨socket
-	if ((sockfd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)) == -1) {
-		printf("Error socket(): %s(%d)\n", strerror(errno), errno);
+	if(-1==connect_to(&sockfd, "127.0.0.1", 6789)){
 		return 1;
 	}
 
-	//ÉèÖÃÄ¿±êÖ÷»úµÄipºÍport
-	memset(&addr, 0, sizeof(addr));
-	addr.sin_family = AF_INET;
-	addr.sin_port = 6789;
-	if (inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr) <= 0) {			//×ª»»ipµØÖ·:µã·ÖÊ®½øÖÆ-->¶ş½øÖÆ
-		printf("Error inet_pton(): %s(%d)\n", strerror(errno), errno);
-		return 1;
-	}
+	get_response(sockfd);
 
-	//Á¬½ÓÉÏÄ¿±êÖ÷»ú£¨½«socketºÍÄ¿±êÖ÷»úÁ¬½Ó£©-- ×èÈûº¯Êı
-	if (connect(sockfd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
-		printf("Error connect(): %s(%d)\n", strerror(errno), errno);
-		return 1;
-	}
+	listen(&sockfd, 6789);
 
-	//»ñÈ¡¼üÅÌÊäÈë
-	fgets(sentence, 4096, stdin);
-	len = strlen(sentence);
-	sentence[len] = '\n';
-	sentence[len + 1] = '\0';
-	
-	//°Ñ¼üÅÌÊäÈëĞ´Èësocket
-	p = 0;
-	while (p < len) {
-		int n = write(sockfd, sentence + p, len + 1 - p);		//writeº¯Êı²»±£Ö¤ËùÓĞµÄÊı¾İĞ´Íê£¬¿ÉÄÜÖĞÍ¾ÍË³ö
-		if (n < 0) {
-			printf("Error write(): %s(%d)\n", strerror(errno), errno);
-			return 1;
- 		} else {
-			p += n;
-		}			
-	}
+	write(sockfd, "POST ", );
 
-	//Õ¥¸Ésocket½ÓÊÕµ½µÄÄÚÈİ
-	p = 0;
-	while (1) {
-		int n = read(sockfd, sentence + p, 8191 - p);
-		if (n < 0) {
-			printf("Error read(): %s(%d)\n", strerror(errno), errno);	//read²»±£Ö¤Ò»´Î¶ÁÍê£¬¿ÉÄÜÖĞÍ¾ÍË³ö
-			return 1;
-		} else if (n == 0) {
-			break;
-		} else {
-			p += n;
-			if (sentence[p - 1] == '\n') {
-				break;
-			}
+	while(1){
+
+		/*
+		//è·å–é”®ç›˜è¾“å…¥
+		fgets(sentence, 4096, stdin);
+		len = strlen(sentence);
+		sentence[len] = '\r';
+		sentence[len+1] = '\n';
+		sentence[len + 2] = '\0';
+
+		
+		//æŠŠé”®ç›˜è¾“å…¥å†™å…¥socket
+		p = 0;
+		while (p < len) {
+			int n = write(sockfd, sentence + p, len + 2 - p);		//writeå‡½æ•°ä¸ä¿è¯æ‰€æœ‰çš„æ•°æ®å†™å®Œï¼Œå¯èƒ½ä¸­é€”é€€å‡º
+			if (n < 0) {
+				printf("Error write(): %s(%d)\n", strerror(errno), errno);
+				return 1;
+			} else {
+				p += n;
+			}			
 		}
+
+		printf("TO SERVER: %s", sentence);
+
+		//æ¦¨å¹²socketæ¥æ”¶åˆ°çš„å†…å®¹
+		get_response(sockfd);		//æ³¨æ„ï¼šreadå¹¶ä¸ä¼šå°†å­—ç¬¦ä¸²åŠ ä¸Š'\0'ï¼Œéœ€è¦æ‰‹åŠ¨æ·»åŠ 
+		*/
+
 	}
-
-	//×¢Òâ£ºread²¢²»»á½«×Ö·û´®¼ÓÉÏ'\0'£¬ĞèÒªÊÖ¶¯Ìí¼Ó
-	sentence[p - 1] = '\0';
-
-	printf("FROM SERVER: %s", sentence);
-
-	close(sockfd);
 
 	return 0;
 }

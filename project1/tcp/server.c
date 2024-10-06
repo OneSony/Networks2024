@@ -9,84 +9,186 @@
 #include <memory.h>
 #include <stdio.h>
 
+#define SENTENCE_LEN 8192
+
+enum user_status {
+	CONNECTED,
+	USER,
+	PASS,
+	PORT,
+	PASV
+};
+
+enum user_status status; 
+
+struct request{
+	char verb[5];
+	char parameter[256];
+};
+
+int connect_ip(int* sockfd, char* ip, int port) {
+	if ((*sockfd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)) == -1) {
+		printf("Error socket(): %s(%d)\n", strerror(errno), errno);
+		return 1;
+	}
+
+	struct sockaddr_in addr;
+	memset(&addr, 0, sizeof(addr));
+	addr.sin_family = AF_INET;
+	addr.sin_port = htons(port);
+	addr.sin_addr.s_addr = inet_addr(ip);
+
+	if (connect(*sockfd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+		printf("Error connect(): %s(%d)\n", strerror(errno), errno);
+		close(*sockfd);
+		return 1;
+	}
+
+	return 0;
+}
+
+int get_request(int sockfd, struct request* req) {
+	char sentence[SENTENCE_LEN];
+	int p = 0;
+	while (1) {
+		int n = read(sockfd, sentence + p, SENTENCE_LEN - p);
+		if (n < 0) {
+			printf("Error read(): %s(%d)\n", strerror(errno), errno);
+			return -1;
+		} else if (n == 0) {
+			break; //TODO
+		} else {
+			p += n;
+			if (sentence[p - 2] == '\r' && sentence[p - 1] == '\n') {
+				sentence[p - 2] = '\0';
+				break;
+			}
+		}
+	}
+
+	sscanf(sentence,"%s %[^\n]",req->verb,req->parameter);
+	return 0;
+}
+
+int send_response(int sockfd, char* sentence) {
+	int len = strlen(sentence);
+	int p = 0;
+	while (p < len) {
+		int n = write(sockfd, sentence + p, len - p);
+		if (n < 0) {
+			printf("Error write(): %s(%d)\n", strerror(errno), errno);
+			return -1;
+		} else {
+			p += n;
+		}
+	}
+	return 0;
+}
+
+int handle_request(int sockfd, struct request* req) {
+
+	if(status==CONNECTED){
+		if (strcmp(req->verb, "USER") == 0 && strcmp(req->parameter, "anonymous") == 0) {
+			status=USER;
+			send_response(sockfd, "331 Please specify the password.\r\n");//ask for an email address TODO
+		}else{
+			send_response(sockfd, "wrong\r\n"); //TODO
+		}
+	}else if(status==USER){
+		if (strcmp(req->verb, "PASS") == 0) {
+			status=PASS;
+			send_response(sockfd, "230 Login successful.\r\n");
+		}else{
+			send_response(sockfd, "wrong\r\n"); //TODO
+		}
+	}else if(status==PASS){
+		if (strcmp(req->verb, "PORT") == 0) {
+			int p1,p2,p3,p4,p5,p6;
+			sscanf(req->parameter,"%d,%d,%d,%d,%d,%d",&p1,&p2,&p3,&p4,&p5,&p6);
+
+			char ip[16];
+			sprintf(ip,"%d.%d.%d.%d",p1,p2,p3,p4);
+
+			int port=p5*256+p6;
+
+			int datafd;
+			if(-1==connect_ip(&datafd,ip,port)){
+				printf("connect_ip error\n");
+			}
+			printf("connect_ip success\n");
+			status=PORT;
+			
+		} else if (strcmp(req->verb, "PASV") == 0) {
+			status=PASV;
+			send_response(sockfd, "227 Entering Passive Mode (127,0,0,1,0,20).\r\n");
+		}
+	}
+	return 0;
+}
+
+
+
 int main(int argc, char **argv) {
-	int listenfd, connfd;		//¼àÌısocketºÍÁ¬½Ósocket²»Ò»Ñù£¬ºóÕßÓÃÓÚÊı¾İ´«Êä
+	int listenfd, connfd;		//ç›‘å¬socketå’Œè¿æ¥socketä¸ä¸€æ ·ï¼Œåè€…ç”¨äºæ•°æ®ä¼ è¾“
 	struct sockaddr_in addr;
 	char sentence[8192];
 	int p;
 	int len;
 
-	//´´½¨socket
+	//åˆ›å»ºsocket
 	if ((listenfd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)) == -1) {
 		printf("Error socket(): %s(%d)\n", strerror(errno), errno);
 		return 1;
 	}
 
-	//ÉèÖÃ±¾»úµÄipºÍport
+	//è®¾ç½®æœ¬æœºçš„ipå’Œport
 	memset(&addr, 0, sizeof(addr));
 	addr.sin_family = AF_INET;
 	addr.sin_port = 6789;
-	addr.sin_addr.s_addr = htonl(INADDR_ANY);	//¼àÌı"0.0.0.0"
+	addr.sin_addr.s_addr = htonl(INADDR_ANY);	//ç›‘å¬"0.0.0.0"
 
-	//½«±¾»úµÄipºÍportÓësocket°ó¶¨
+	//å°†æœ¬æœºçš„ipå’Œportä¸socketç»‘å®š
 	if (bind(listenfd, (struct sockaddr*)&addr, sizeof(addr)) == -1) {
 		printf("Error bind(): %s(%d)\n", strerror(errno), errno);
 		return 1;
 	}
 
-	//¿ªÊ¼¼àÌısocket
+	//å¼€å§‹ç›‘å¬socket
 	if (listen(listenfd, 10) == -1) {
 		printf("Error listen(): %s(%d)\n", strerror(errno), errno);
 		return 1;
 	}
 
-	//³ÖĞø¼àÌıÁ¬½ÓÇëÇó
+	//æŒç»­ç›‘å¬è¿æ¥è¯·æ±‚
 	while (1) {
-		//µÈ´ıclientµÄÁ¬½Ó -- ×èÈûº¯Êı
+		//ç­‰å¾…clientçš„è¿æ¥ -- é˜»å¡å‡½æ•°
 		if ((connfd = accept(listenfd, NULL, NULL)) == -1) {
 			printf("Error accept(): %s(%d)\n", strerror(errno), errno);
 			continue;
 		}
-		
-		//Õ¥¸Ésocket´«À´µÄÄÚÈİ
-		p = 0;
-		while (1) {
-			int n = read(connfd, sentence + p, 8191 - p);
-			if (n < 0) {
-				printf("Error read(): %s(%d)\n", strerror(errno), errno);
-				close(connfd);
-				continue;
-			} else if (n == 0) {
-				break;
-			} else {
-				p += n;
-				if (sentence[p - 1] == '\n') {
+
+		//forkä¸€ä¸ªå­è¿›ç¨‹å¤„ç†è¿æ¥
+		int pid = fork();
+        if (pid < 0) {
+
+        } else if (pid == 0) {
+			status=CONNECTED;
+            close(listenfd);
+			send_response(connfd, "220 Anonymous FTP server ready.\r\n");
+			while (1){
+				struct request req;
+				get_request(connfd,&req);
+				printf("verb: %s\n",req.verb);
+				printf("parameter: %s\n",req.parameter);
+
+				//è§£æ
+				if(handle_request(connfd,&req)==1){
 					break;
 				}
 			}
+			close(connfd);
+			return 0;
 		}
-		//socket½ÓÊÕµ½µÄ×Ö·û´®²¢²»»áÌí¼Ó'\0'
-		sentence[p - 1] = '\0';
-		len = p - 1;
-		
-		//×Ö·û´®´¦Àí
-		for (p = 0; p < len; p++) {
-			sentence[p] = toupper(sentence[p]);
-		}
-
-		//·¢ËÍ×Ö·û´®µ½socket
- 		p = 0;
-		while (p < len) {
-			int n = write(connfd, sentence + p, len + 1 - p);
-			if (n < 0) {
-				printf("Error write(): %s(%d)\n", strerror(errno), errno);
-				return 1;
-	 		} else {
-				p += n;
-			}			
-		}
-
-		close(connfd);
 	}
 
 	close(listenfd);
