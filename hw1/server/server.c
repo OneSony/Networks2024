@@ -1,11 +1,11 @@
 #include <netinet/in.h>
 #include <sys/socket.h>
-
+#include <sys/wait.h>
 #include <stdio.h>
 #include <string.h>
 #include <getopt.h>
 #include <stdlib.h>
-
+#include <arpa/inet.h>
 #include <memory.h>
 
 #include <errno.h>
@@ -105,6 +105,8 @@ int get_cwd(char *str) {
 
     // Copy the processed string back to the original pointer
     strcpy(str, result);
+
+    return 0;
 }
 
 int change_dir(char *path) {
@@ -201,6 +203,27 @@ int send_ls_old(char *path, int socket) {
     }
 
     closedir(dir);
+    return 0;
+}
+
+int connect_to(int *sockfd, char *ip, int port) {
+    if ((*sockfd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)) == -1) {
+        printf("Error socket(): %s(%d)\n", strerror(errno), errno);
+        return 1;
+    }
+
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(port);
+    addr.sin_addr.s_addr = inet_addr(ip);
+
+    if (connect(*sockfd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+        printf("Error connect(): %s(%d)\n", strerror(errno), errno);
+        close(*sockfd);
+        return 1;
+    }
+
     return 0;
 }
 
@@ -329,7 +352,7 @@ int listen_at(int *sockfd, int port) {
 }
 
 int parse_response(char *msg, struct response *res) {
-    memset(res, 0, sizeof(res));
+    memset(res, 0, sizeof(*res));
     int i = 0;
     char *p = msg;
     while (1) {
@@ -344,7 +367,7 @@ int parse_response(char *msg, struct response *res) {
 }
 
 int parse_request(char *msg, struct request *req) {
-    memset(req, 0, sizeof(req));
+    memset(req, 0, sizeof(*req));
     sscanf(msg, "%s %[^\n]", req->verb, req->parameter);
     return 0;
 }
@@ -634,7 +657,7 @@ int handle_request(char *msg) {
             get_cwd(path);
             printf("path: %s\n", path);
 
-            char buff[256];
+            char buff[300];
             sprintf(buff, "257 \"%s\" is the current directory.\r\n", path);
             send_msg(control_socket, buff);
             return 0;
@@ -682,33 +705,12 @@ int handle_request(char *msg) {
         send_msg(control_socket, "502 retry\r\n");
     }
 
-    // return 2;
-}
-
-int connect_to(int *sockfd, char *ip, int port) {
-    if ((*sockfd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)) == -1) {
-        printf("Error socket(): %s(%d)\n", strerror(errno), errno);
-        return 1;
-    }
-
-    struct sockaddr_in addr;
-    memset(&addr, 0, sizeof(addr));
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(port);
-    addr.sin_addr.s_addr = inet_addr(ip);
-
-    if (connect(*sockfd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-        printf("Error connect(): %s(%d)\n", strerror(errno), errno);
-        close(*sockfd);
-        return 1;
-    }
-
     return 0;
 }
 
+
 int main(int argc, char *argv[]) {
 
-	int opt;
     int port = 21; // 默认端口
     char root_directory[256] = "/tmp"; // 用于存储根目录，确保分配足够的空间
     

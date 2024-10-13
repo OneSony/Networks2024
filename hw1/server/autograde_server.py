@@ -24,7 +24,6 @@ class TestServer:
             
             stdout = stdout.decode('utf-8') if stdout else ''
             stderr = stderr.decode('utf-8') if stderr else ''
-
             if not (stdout and stderr):
                 break
             if stdout and '-Wall' not in stdout:
@@ -57,25 +56,21 @@ class TestServer:
                 print('You missed response 220')
             else:
                 self.credit += self.minor
-                print('connect got 2')
             # login
             if not ftp.login().startswith('230'):
                 print('You missed response 230')
             else:
                 self.credit += self.minor
-                print('login got 2')
             # SYST
             if ftp.sendcmd('SYST') != '215 UNIX Type: L8':
                 print('Bad response for SYST')
             else:
                 self.credit += self.minor
-                print('SYST got 2')
             # TYPE
             if ftp.sendcmd('TYPE I') != '200 Type set to I.':
                 print('Bad response for TYPE I')
             else:
                 self.credit += self.minor
-                print('TYPE got 2')
 
             # PORT download
             filename = 'test%d.data' % random.randint(100, 200)
@@ -87,7 +82,6 @@ class TestServer:
                 print('Something wrong with RETR')
             else:
                 self.credit += self.minor
-                print('PORT download got 2')
             os.remove(directory + '/' + filename)
             os.remove(filename)
             
@@ -103,7 +97,6 @@ class TestServer:
                 print('Something wrong with STOR')
             else:
                 self.credit += self.minor
-                print('PASV upload got 2')
             os.remove(directory + '/' + filename)
             os.remove(filename)
 
@@ -112,7 +105,6 @@ class TestServer:
                 print('Bad response for QUIT')
             else:
                 self.credit += self.minor
-                print('QUIT got 2')
             ftp2.quit()
             server.kill()
 
