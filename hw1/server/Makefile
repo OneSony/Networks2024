@@ -1,4 +1,4 @@
-server : server.c
+server : server.c server.h
 	gcc -o server server.c -Wall
 
 clean :

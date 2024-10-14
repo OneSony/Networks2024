@@ -1,59 +1,20 @@
-#include <netinet/in.h>
-#include <sys/socket.h>
-#include <sys/wait.h>
-#include <stdio.h>
-#include <string.h>
-#include <getopt.h>
-#include <stdlib.h>
-#include <arpa/inet.h>
-#include <memory.h>
-
-#include <errno.h>
-
-#include <signal.h>
-#include <unistd.h>
-
-#include <dirent.h>
-#include <sys/stat.h>
-#include <time.h>
-
-#define SENTENCE_LEN 8192
-#define MIN_PORT 20000
-#define MAX_PORT 65535
-#define MAX_RES 100
+#include "server.h"
 
 // control socket: USER PASS QUIT SYST TYPE PORT PASV MKD CWD PWD
 // data socket: RETR STOR LIST
 
-enum user_status { CONNECTED, USER, PASS, PORT, PASV, RERT, STOR };
+// TODO 获取本机ip
+// TODO 路径不合法 ..
+// TODO CWD空？
 
 enum user_status status;
-
-struct request {
-    char verb[5];
-    char parameter[256];
-};
-
-struct response {
-    char code[4];
-    char message[MAX_RES][256];
-};
 
 int control_listen_socket;
 int control_socket;
 int data_listen_socket;
 int data_socket;
 
-int data_pid;
-
-struct port_mode_info_s {
-    char ip[16];
-    int port;
-};
-
-struct pasv_mode_info_s {
-    int port;
-};
+int binary_mode;
 
 struct port_mode_info_s port_mode_info;
 struct pasv_mode_info_s pasv_mode_info;
@@ -73,11 +34,7 @@ int send_msg(int sockfd, char *sentence) {
     return 0;
 }
 
-int get_cwd(char *str) {
-    if (getcwd(str, 256) == NULL) {
-        printf("Error getcwd(): %s(%d)\n", strerror(errno), errno);
-        return 1;
-    }
+int rewrite_path(char *str) {
 
     char result[1024]; // Adjust size as needed, larger than the expected string
     int j = 0;         // Index for the new buffer
@@ -105,6 +62,17 @@ int get_cwd(char *str) {
 
     // Copy the processed string back to the original pointer
     strcpy(str, result);
+
+    return 0;
+}
+
+int get_cwd(char *str) {
+    if (getcwd(str, 256) == NULL) {
+        printf("Error getcwd(): %s(%d)\n", strerror(errno), errno);
+        return 1;
+    }
+
+    rewrite_path(str);
 
     return 0;
 }
@@ -249,7 +217,19 @@ int get_msg(int sockfd, char *sentence) {
     return 0;
 }
 
+int path_check(char *path) {
+    if (strstr(path, "../") != NULL) {
+        return 1; // 包含 '../'
+    }
+    return 0; // 不包含 '../'
+}
+
 int file_check(char *filename, int *size) {
+
+    if (path_check(filename) != 0) { // 路径不合法
+        return 1;
+    }
+
     struct stat path_stat;
     // 使用 stat 函数获取文件状态
     if (stat(filename, &path_stat) != 0) {
@@ -314,8 +294,6 @@ int get_file(int sockfd, char *filename) {
 }
 
 int listen_at(int *sockfd, int port) {
-    printf("*****listen_at %d\n", port);
-    printf("*****listen_at %d\n", *sockfd);
 
     if ((*sockfd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)) == -1) {
         printf("Error socket(): %s(%d)\n", strerror(errno), errno);
@@ -373,24 +351,49 @@ int parse_request(char *msg, struct request *req) {
 }
 
 int handle_request(char *msg) {
-
+    // TODO return 0!!!
     struct request req;
     parse_request(msg, &req);
-    printf("req.verb: %s\n", req.verb);
-    printf("req.parameter: %s\n", req.parameter);
+    printf("** verb: %s\n", req.verb);
+    printf("** para: %s\n", req.parameter);
 
     if (strcmp(req.verb, "QUIT") == 0 || strcmp(req.verb, "ABOR") == 0) {
         send_msg(control_socket, "221 Goodbye.\r\n");
         return 1;
+    } else if (strcmp(req.verb, "USER") == 0) {
+        if (status == CONNECTED) {
+            if (strcmp(req.parameter, "anonymous") == 0) {
+                send_msg(control_socket,
+                         "331 Please provide your email address as a "
+                         "password.\r\n"); // ask for an email
+                status = USER;
+                return 0;
+            } else {
+                send_msg(control_socket,
+                         "530 Only \"anonymous\" can be used.\r\n");
+                return 0;
+            }
+        } // TODO ??
+    } else if (strcmp(req.verb, "PASS") == 0) {
+        if (status == USER) {
+            send_msg(control_socket, "230 Login successful.\r\n");
+            status = PASS;
+            return 0;
+        } else {
+            send_msg(control_socket,
+                     "503 Please use the USER command first.\r\n");
+            return 0;
+        }
     } else if (strcmp(req.verb, "SYST") == 0) {
         send_msg(control_socket, "215 UNIX Type: L8\r\n");
     } else if (strcmp(req.verb, "TYPE") == 0) {
         if (strcmp(req.parameter, "I") == 0) {
             send_msg(control_socket, "200 Type set to I.\r\n");
+            binary_mode = 1; // on
         } else {
-            send_msg(control_socket, "500 retry just I.\r\n");
+            send_msg(control_socket, "500 retry just I.\r\n"); // TODO
         }
-    } else if (strcmp(req.verb, "SIZE") == 0) {
+    } else if (strcmp(req.verb, "SIZE") == 0) { // TODO
         int size;
         int ret = file_check(req.parameter, &size);
 
@@ -405,31 +408,77 @@ int handle_request(char *msg) {
         } else if (ret == 2) {
             send_msg(control_socket, "451 not a file.\r\n");
             printf("2\n");
-        }else{
-			send_msg(control_socket, "500 retry.\r\n");
-		}
-    } else if (strcmp(req.verb, "USER") == 0) {
-        if (status == CONNECTED) {
-            if (strcmp(req.parameter, "anonymous") == 0) {
-                send_msg(
-                    control_socket,
-                    "331 Please specify the password.\r\n"); // ask for an email
-                status = USER;
-            } else {
-                send_msg(control_socket, "500 retry username.\r\n");
-            }
         } else {
             send_msg(control_socket, "500 retry.\r\n");
         }
-    } else if (strcmp(req.verb, "PASS") == 0) {
-        if (status == USER) {
-            send_msg(control_socket, "230 Login successful.\r\n");
-            status = PASS;
-        } else {
-            send_msg(control_socket, "500 please use username.\r\n");
+    } else if (strcmp(req.verb, "PWD") == 0) {
+        if (status == PASS || status == PORT || status == PASV) {
+            char path[256];
+
+            get_cwd(path);
+            printf("path: %s\n", path);
+
+            char buff[400];
+            sprintf(buff, "257 \"%s\" is the current directory.\r\n", path);
+            send_msg(control_socket, buff);
+            return 0;
+        }
+    } else if (strcmp(req.verb, "CWD") == 0) {
+        if (status == PASS || status == PORT || status == PASV) {
+            char path[256];
+            sscanf(req.parameter, "%s", path);
+
+            if (strcmp(path, "") == 0) {
+                send_msg(control_socket, "550 Missing path.\r\n");
+                return 0;
+            } else {
+                int ret = change_dir(path);
+                if (ret == 0) {
+                    send_msg(control_socket,
+                             "250 Directory successfully changed.\r\n");
+                    return 0;
+                } else if (ret == 2) {
+                    send_msg(control_socket, "550 Path is not available.\r\n");
+                    return 0;
+                }
+            }
+        }
+    } else if (strcmp(req.verb, "MKD") == 0) {
+        if (status == PASS || status == PORT || status == PASV) {
+            char path[256];
+            sscanf(req.parameter, "%s", path);
+
+            if (mkdir(path, 0777) == 0) {
+                rewrite_path(path);
+                char buff[400];
+                sprintf(buff, "257 \"%s\" is created.\r\n", path);
+                send_msg(control_socket, buff);
+            } else {
+                send_msg(control_socket,
+                         "550 Failed to create the directory.\r\n"); // TODO
+            }
+            return 0;
+        }
+    } else if (strcmp(req.verb, "RMD") == 0) {
+        if (status == PASS || status == PORT || status == PASV) {
+            char path[256];
+            sscanf(req.parameter, "%s", path);
+
+            if (rmdir(path) == 0) {
+                send_msg(control_socket, "250 Directory deleted.\r\n");
+            } else {
+                send_msg(control_socket,
+                         "550 Failed to remove the directory..\r\n"); // TODO
+            }
+            return 0;
         }
     } else if (strcmp(req.verb, "PORT") == 0) {
-        if (status == PASS) {
+        if (status == PASS || status == PORT || status == PASV) {
+
+            if (status == PASV) { // 关闭旧的
+                close(data_listen_socket);
+            }
+
             int p1, p2, p3, p4, p5, p6;
             sscanf(req.parameter, "%d,%d,%d,%d,%d,%d", &p1, &p2, &p3, &p4, &p5,
                    &p6);
@@ -439,11 +488,18 @@ int handle_request(char *msg) {
 
             send_msg(control_socket, "200 PORT command successful.\r\n");
             status = PORT;
-        } else {
-            send_msg(control_socket, "500 not login.\r\n");
+
+            return 0;
         }
     } else if (strcmp(req.verb, "PASV") == 0) {
-        if (status == PASS) {
+        // TODO 什么时候建立连接？？是对的？因为我已经listen了
+        if (status == PASS || status == PASV ||
+            status == PORT) { // 已开PASV重新更新
+
+            if (status == PASV) { // 关闭旧的
+                close(data_listen_socket);
+            }
+
             // TODO pasv ip
             printf("data_port: %d\n", data_listen_socket);
             while (1) { // 随机选一个端口
@@ -456,19 +512,98 @@ int handle_request(char *msg) {
             }
             printf("data_port: %d\n", data_listen_socket);
 
+            int p1, p2, p3, p4;
+            sscanf(pasv_mode_info.ip, "%d.%d.%d.%d", &p1, &p2, &p3, &p4);
+
             char buff[256];
-            sprintf(buff, "227 Entering Passive Mode (127,0,0,1,%d,%d).\r\n",
-                    pasv_mode_info.port / 256, pasv_mode_info.port % 256);
+            sprintf(buff, "227 Entering Passive Mode (%d,%d,%d,%d,%d,%d).\r\n",
+                    p1, p2, p3, p4, pasv_mode_info.port / 256,
+                    pasv_mode_info.port % 256);
             send_msg(control_socket, buff);
             status = PASV;
-        } else {
-            send_msg(control_socket, "500 not login.\r\n");
+
+            return 0;
         }
     } else if (strcmp(req.verb, "RETR") == 0) {
         if (status == PORT || status == PASV) {
 
-            if (file_check(req.parameter, NULL) != 0) {
-                send_msg(control_socket, "451 not a file.\r\n");
+            int ret = file_check(req.parameter, NULL);
+
+            if (ret == 1) {
+                send_msg(control_socket,
+                         "451 Paths cannot contain \"../\".\r\n");
+            } else if (ret == 2) {
+                send_msg(control_socket, "451 This is not a file.\r\n");
+            } else if (ret == 0) {
+
+                // 建立连接
+                if (status == PORT) {
+                    // TODO
+                    if (0 != connect_to(&data_socket, port_mode_info.ip,
+                                        port_mode_info.port)) {
+                        printf("connect_to error\n");
+                        send_msg(control_socket,
+                                 "425 no TCP connection was established\r\n");
+                    }
+                } else if (status == PASV) {
+                    if ((data_socket =
+                             accept(data_listen_socket, NULL, NULL)) == -1) {
+                        printf("Error accept(): %s(%d)\n", strerror(errno),
+                               errno);
+                        close(data_listen_socket);
+                        send_msg(control_socket,
+                                 "425 no TCP connection was established\r\n");
+                    }
+                }
+
+                printf("accept success\n");
+                send_msg(control_socket,
+                         "150 Opening BINARY mode data connection.\r\n");
+
+                int pid = fork();
+                if (pid == 0) { // 创建DTP
+                    close(control_socket);
+
+                    // send
+                    int ret = send_file(data_socket, req.parameter);
+                    close(data_socket);
+                    printf("**end send file success\n");
+                    exit(ret);
+                } else {
+                    close(data_socket);
+
+                    printf("pid: %d\n", pid);
+
+                    int data_status;
+                    waitpid(pid, &data_status, 0);
+
+                    if (data_status == 0) {
+                        send_msg(control_socket, "226 Transfer complete.\r\n");
+                    } else if (data_status == 1) {
+                        send_msg(control_socket,
+                                 "425 no TCP connection was established\r\n");
+                    } else if (data_status == 2) { // cannot open file
+                        send_msg(
+                            control_socket,
+                            "451 had trouble reading the file from disk.\r\n");
+                    } else {
+                        send_msg(control_socket, "500 Internal error.\r\n");
+                    }
+                }
+            }
+        } else {
+            send_msg(control_socket,
+                     "425 no TCP connection was established\r\n");
+        }
+
+        status = PASS;
+        return 0;
+    } else if (strcmp(req.verb, "STOR") == 0) { // TODO
+        if (status == PORT || status == PASV) {
+
+            if (path_check(req.parameter) != 0) {
+                send_msg(control_socket,
+                         "451 Paths cannot contain \"../\".\r\n");
             } else {
 
                 // 建立连接
@@ -493,22 +628,22 @@ int handle_request(char *msg) {
                 send_msg(control_socket,
                          "150 Opening BINARY mode data connection.\r\n");
 
-                data_pid = fork();
-                if (data_pid == 0) { // 创建DTP
+                int pid = fork();
+                if (pid == 0) { // 创建DTP
                     close(control_socket);
 
                     // send
-                    int ret = send_file(data_socket, req.parameter);
+                    int ret = get_file(data_socket, req.parameter);
                     close(data_socket);
                     printf("**end send file success\n");
                     exit(ret);
                 } else {
                     close(data_socket);
 
-                    printf("pid: %d\n", data_pid);
+                    printf("pid: %d\n", pid);
 
                     int data_status;
-                    waitpid(data_pid, &data_status, 0);
+                    waitpid(pid, &data_status, 0);
 
                     if (data_status == 0) {
                         send_msg(control_socket, "226 Transfer complete.\r\n");
@@ -524,72 +659,14 @@ int handle_request(char *msg) {
                     }
                 }
             }
+
         } else {
             send_msg(control_socket, "425 No TCP connection\r\n");
         }
 
         status = PASS;
-    } else if (strcmp(req.verb, "STOR") == 0) {
-        if (status == PORT || status == PASV) {
-
-            // 建立连接
-            if (status == PORT) {
-                // TODO
-                if (0 != connect_to(&data_socket, port_mode_info.ip,
-                                    port_mode_info.port)) {
-                    printf("connect_to error\n");
-                    exit(1);
-                }
-            } else if (status == PASV) {
-                if ((data_socket =
-                            accept(data_listen_socket, NULL, NULL)) == -1) {
-                    printf("Error accept(): %s(%d)\n", strerror(errno),
-                            errno);
-                    close(data_listen_socket);
-                    exit(1);
-                }
-            }
-
-            printf("accept success\n");
-            send_msg(control_socket,
-                        "150 Opening BINARY mode data connection.\r\n");
-
-            data_pid = fork();
-            if (data_pid == 0) { // 创建DTP
-                close(control_socket);
-
-                // send
-                int ret = get_file(data_socket, req.parameter);
-                close(data_socket);
-                printf("**end send file success\n");
-                exit(ret);
-            } else {
-                close(data_socket);
-
-                printf("pid: %d\n", data_pid);
-
-                int data_status;
-                waitpid(data_pid, &data_status, 0);
-
-                if (data_status == 0) {
-                    send_msg(control_socket, "226 Transfer complete.\r\n");
-                } else if (data_status == 1) {
-                    send_msg(control_socket,
-                                "425 no TCP connection was established\r\n");
-                } else if (data_status == 2) { // cannot open file
-                    send_msg(
-                        control_socket,
-                        "451 had trouble reading the file from disk.\r\n");
-                } else {
-                    send_msg(control_socket, "500 Internal error.\r\n");
-                }
-            }
-        } else {
-            send_msg(control_socket, "425 No TCP connection\r\n");
-        }
-
-        status = PASS;
-    } else if (strcmp(req.verb, "LIST") == 0) {
+        return 0;
+    } else if (strcmp(req.verb, "LIST") == 0) { // TODO
         if (status == PORT || status == PASV) {
 
             // 建立连接
@@ -613,8 +690,8 @@ int handle_request(char *msg) {
             send_msg(control_socket,
                      "150 Opening BINARY mode data connection.\r\n");
 
-            data_pid = fork();
-            if (data_pid == 0) { // 创建DTP
+            int pid = fork();
+            if (pid == 0) { // 创建DTP
                 close(control_socket);
 
                 if (strcmp(req.parameter, "") == 0) {
@@ -628,10 +705,10 @@ int handle_request(char *msg) {
             } else {
                 close(data_socket);
 
-                printf("pid: %d\n", data_pid);
+                printf("pid: %d\n", pid);
 
                 int data_status;
-                waitpid(data_pid, &data_status, 0);
+                waitpid(pid, &data_status, 0);
 
                 if (data_status == 0) {
                     send_msg(control_socket, "226 Transfer complete.\r\n");
@@ -650,57 +727,7 @@ int handle_request(char *msg) {
         }
 
         status = PASS;
-    } else if (strcmp(req.verb, "PWD") == 0) {
-        if (status == PASS || status == PORT || status == PASV) {
-            char path[256];
-
-            get_cwd(path);
-            printf("path: %s\n", path);
-
-            char buff[300];
-            sprintf(buff, "257 \"%s\" is the current directory.\r\n", path);
-            send_msg(control_socket, buff);
-            return 0;
-        } else {
-            send_msg(control_socket, "500 please login.\r\n");
-        }
-    } else if (strcmp(req.verb, "CWD") == 0) {
-        if (status == PASS || status == PORT || status == PASV) {
-            char path[256];
-            sscanf(req.parameter, "%s", path);
-
-            int ret = change_dir(path);
-            if (ret == 0) {
-                send_msg(control_socket,
-                         "250 Directory successfully changed.\r\n");
-            } else if (ret == 2) {
-                send_msg(control_socket, "550 unknown.\r\n"); // TODO
-            } else {
-                send_msg(control_socket, "500 retry.\r\n");
-            }
-        }
-    } else if (strcmp(req.verb, "MKD") == 0) {
-        if (status == PASS || status == PORT || status == PASV) {
-            char path[256];
-            sscanf(req.parameter, "%s", path);
-
-            if (mkdir(path, 0777) == 0) {
-                send_msg(control_socket, "257 Directory created.\r\n");
-            } else {
-                send_msg(control_socket, "500 retry.\r\n");
-            }
-        }
-    } else if (strcmp(req.verb, "RMD") == 0) {
-        if (status == PASS || status == PORT || status == PASV) {
-            char path[256];
-            sscanf(req.parameter, "%s", path);
-
-            if (rmdir(path) == 0) {
-                send_msg(control_socket, "250 Directory deleted.\r\n");
-            } else {
-                send_msg(control_socket, "500 retry.\r\n");
-            }
-        }
+        return 0;
     } else {
         send_msg(control_socket, "502 retry\r\n");
     }
@@ -708,18 +735,18 @@ int handle_request(char *msg) {
     return 0;
 }
 
-
 int main(int argc, char *argv[]) {
+    binary_mode = 1; // on
 
-    int port = 21; // 默认端口
+    int port = 21;                     // 默认端口
     char root_directory[256] = "/tmp"; // 用于存储根目录，确保分配足够的空间
-    
+    strcpy(pasv_mode_info.ip, "127.0.0.1");
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-port") == 0) {
             if (i + 1 < argc) {
                 port = atoi(argv[i + 1]); // 将字符串转换为整数
-                i++; // 跳过参数
+                i++;                      // 跳过参数
             } else {
                 fprintf(stderr, "Error: -port requires an argument\n");
                 exit(EXIT_FAILURE);
@@ -727,25 +754,25 @@ int main(int argc, char *argv[]) {
         } else if (strcmp(argv[i], "-root") == 0) {
             if (i + 1 < argc) {
                 strcpy(root_directory, argv[i + 1]); // 获取根目录字符串
-                i++; // 跳过参数
+                i++;                                 // 跳过参数
             } else {
                 fprintf(stderr, "Error: -root requires an argument\n");
                 exit(EXIT_FAILURE);
             }
         } else {
-            fprintf(stderr, "Usage: %s -port <port> -root <root_directory>\n", argv[0]);
+            fprintf(stderr, "Usage: %s -port <port> -root <root_directory>\n",
+                    argv[0]);
             exit(EXIT_FAILURE);
         }
     }
 
-	printf("port: %d\n", port);
-	printf("root_directory: %s\n", root_directory);
+    printf("port: %d\n", port);
+    printf("root_directory: %s\n", root_directory);
 
-	if(change_dir(root_directory) != 0){
-		printf("Error: cannot change to root directory\n");
-		exit(EXIT_FAILURE);
-	}
-
+    if (change_dir(root_directory) != 0) {
+        printf("Error: cannot change to root directory\n");
+        exit(EXIT_FAILURE);
+    }
 
     if (0 != listen_at(&control_listen_socket, port)) {
         return 1;
