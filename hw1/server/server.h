@@ -13,6 +13,8 @@
 #include <dirent.h>
 #include <sys/stat.h>
 #include <time.h>
+#include <ctype.h>
+#include <poll.h>
 
 #define SENTENCE_LEN 8192
 #define MIN_PORT 20000
@@ -65,3 +67,5 @@ int handle_request(char *msg);
 int rewrite_path(char* str);
 int path_check(char *path);
 
+
+void close_DTP(int sig);

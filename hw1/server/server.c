@@ -18,6 +18,19 @@ int binary_mode;
 struct port_mode_info_s port_mode_info;
 struct pasv_mode_info_s pasv_mode_info;
 
+FILE *file;
+
+int p_fds[2];
+
+void close_DTP(int sig) {
+    // 处理 SIGTERM 信号，执行清理操作
+    fclose(file);
+    close(data_socket);
+    close(p_fds[1]);  // 关闭管道的写入端
+    printf("Child process: Received SIGTERM, exiting...\n");
+    exit(0);  // 正常退出
+}
+
 int send_msg(int sockfd, char *sentence) {
     int len = strlen(sentence);
     int p = 0;
@@ -205,11 +218,20 @@ int get_msg(int sockfd, char *sentence) {
         } else if (n == 0) {
             return -1;
         } else {
+            //p += n;
+            //printf("sentence: %s\n", sentence);
+
+            for (int i = 0; i < n; i++) {
+                printf("%02x ", (unsigned char)sentence[p+i]);  // 打印每个字节的十六进制值
+            }
+            printf("\n");
+
             p += n;
             if (sentence[p - 2] == '\r' && sentence[p - 1] == '\n') {
                 sentence[p - 2] = '\0';
                 break;
             }
+
         }
     }
 
@@ -252,18 +274,19 @@ int file_check(char *filename, int *size) {
 int send_file(int sockfd, char *filename) {
     printf("send_file %s\n", filename);
 
-    FILE *file = fopen(filename, "rb");
+    file = fopen(filename, "rb");
     if (file == NULL) {
         printf("Error fopen(): %s(%d)\n", strerror(errno), errno);
         return 2;
     }
 
-    printf("send file %s\n", filename);
+    //printf("send file %s\n", filename);
 
     char buff[256];
     int n;
     while ((n = fread(buff, 1, 256, file)) > 0) {
-        printf("n: %d\n", n);
+        sleep(0.1);
+        //printf("n: %d\n", n);
         write(sockfd, buff, n);
     }
 
@@ -276,7 +299,7 @@ int send_file(int sockfd, char *filename) {
 int get_file(int sockfd, char *filename) {
 
     printf("get_file %s\n", filename);
-    FILE *file = fopen(filename, "wb");
+    file = fopen(filename, "wb");
     if (file == NULL) {
         printf("Error fopen(): %s(%d)\n", strerror(errno), errno);
         return 1;
@@ -345,6 +368,11 @@ int parse_response(char *msg, struct response *res) {
 
 int parse_request(char *msg, struct request *req) {
     memset(req, 0, sizeof(*req));
+
+    while (*msg && !isascii((unsigned char)*msg)) {
+        msg++;
+    }
+
     sscanf(msg, "%s %[^\n]", req->verb, req->parameter);
     return 0;
 }
@@ -572,35 +600,136 @@ int handle_request(char *msg) {
                 send_msg(control_socket,
                          "150 Opening BINARY mode data connection.\r\n");
 
+                //int p_fds[2]; //父子进程通讯通道
+                if (pipe(p_fds) == -1) {
+                    perror("pipe");
+                    exit(1);
+                }
+
+                printf("pipe success\n");
+
                 int pid = fork();
                 if (pid == 0) { // 创建DTP
+                    signal(SIGTERM, close_DTP);
                     close(control_socket);
+                    close(p_fds[0]);  // 关闭管道的读取端
 
                     // send
-                    int ret = send_file(data_socket, req.parameter);
+                    //int ret = send_file(data_socket, req.parameter);
+
+                    
+                    printf("send_file %s\n", req.parameter);
+
+                    file = fopen(req.parameter, "rb");
+                    if (file == NULL) {
+                        printf("Error fopen(): %s(%d)\n", strerror(errno), errno);
+                        return 2;
+                    }
+
+                    //printf("send file %s\n", filename);
+
+                    char buff[256];
+                    int n;
+                    while ((n = fread(buff, 1, 256, file)) > 0) {
+                        sleep(0.1);
+                        //printf("n: %d\n", n);
+                        write(data_socket, buff, n);
+                    }
+
+                    printf("send file success\n");
+
+                    fclose(file);
+
+
+
                     close(data_socket);
                     printf("**end send file success\n");
-                    exit(ret);
+
+                    write(p_fds[1], &ret, sizeof(ret));  // 向管道写入数据
+                    close(p_fds[1]);  // 关闭管道的写入端
+                    exit(0);
                 } else {
                     close(data_socket);
+                    close(p_fds[1]);
 
-                    printf("pid: %d\n", pid);
+                    struct pollfd fds[2];
 
-                    int data_status;
-                    waitpid(pid, &data_status, 0);
+                    // 设置 poll 监听 control_socket
+                    fds[0].fd = control_socket;
+                    fds[0].events = POLLIN;  // 监听可读事件
 
-                    if (data_status == 0) {
-                        send_msg(control_socket, "226 Transfer complete.\r\n");
-                    } else if (data_status == 1) {
-                        send_msg(control_socket,
-                                 "425 no TCP connection was established\r\n");
-                    } else if (data_status == 2) { // cannot open file
-                        send_msg(
-                            control_socket,
-                            "451 had trouble reading the file from disk.\r\n");
-                    } else {
-                        send_msg(control_socket, "500 Internal error.\r\n");
+                    // 设置 poll 监听管道，用于接收子进程状态
+                    fds[1].fd = p_fds[0];
+                    fds[1].events = POLLIN;  // 监听可读事件
+
+
+                    printf("Control process: Handling commands.\n");
+
+                    while (1) {
+                        int poll_res = poll(fds, 2, -1);  // 无限等待，直到有事件发生
+
+                        if (poll_res == -1) {
+                            perror("poll");
+                            break;
+                        }
+
+                        // 检查控制 socket 是否有数据到达
+                        if (fds[0].revents & POLLIN) {
+
+                            printf("Control process: have msg.\n");
+                            //get msg
+                            char msg[SENTENCE_LEN];
+                            if (0 != get_msg(control_socket, msg)) {
+                                printf("get_msg error\n");
+                                // TODO 清空port连接断开？？？？
+                                break;
+                            }
+
+                            printf("msg: %s\n", msg);
+
+                            printf(":::%d %d %d %d\n",msg[0],msg[1],msg[2],msg[3]);
+                            
+                            struct request req;
+                            parse_request(msg, &req);
+                            printf("** verb: %s\n", req.verb);
+                            printf("** para: %s\n", req.parameter);
+
+                            if(strcmp(req.verb, "ABOR") == 0 || strcmp(req.verb, "QUIT") == 0){
+                                // 收到 ABOR 命令，终止文件传输
+                                printf("Control process: ABOR command received.\n");
+                                kill(pid, SIGTERM);  // 终止子进程
+                                send_msg(control_socket, "426 Transfer aborted.\r\n");
+                                waitpid(pid, NULL, 0);  // 等待子进程终止
+                                send_msg(control_socket, "226 Abort command was successfully processed.\r\n");
+                                break;
+                            }
+
+                        }
+
+                        // 检查子进程是否结束
+                        if (fds[1].revents & POLLIN) {
+                            int ret;
+                            read(p_fds[0], &ret, sizeof(ret));
+
+                            if (ret == 0) {
+                                send_msg(control_socket, "226 Transfer complete.\r\n");
+                            } else if (ret == 1) {
+                                send_msg(control_socket,
+                                        "425 no TCP connection was established\r\n");
+                            } else if (ret == 2) { // cannot open file
+                                send_msg(
+                                    control_socket,
+                                    "451 had trouble reading the file from disk.\r\n");
+                            } else {
+                                send_msg(control_socket, "500 Internal error.\r\n");
+                            }
+                            break;
+                        }
                     }
+
+                    // 清理
+                    close(p_fds[0]);
+                    waitpid(pid, NULL, 0);  // 确保子进程已经终止
                 }
             }
         } else {
