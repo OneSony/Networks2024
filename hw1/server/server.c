@@ -4,7 +4,6 @@
 // data socket: RETR STOR LIST
 
 // TODO 获取本机ip
-// TODO 路径不合法 ..
 // TODO CWD空？
 
 enum user_status status;
@@ -350,6 +349,10 @@ int parse_request(char *msg, struct request *req) {
     return 0;
 }
 
+
+//PASV打开data listen socket
+//PORT记录
+//RETR STOR LIST通过data listen socket建立data socket，内部已经关闭了data socket和data listen socket
 int handle_request(char *msg) {
     // TODO return 0!!!
     struct request req;
@@ -358,6 +361,9 @@ int handle_request(char *msg) {
     printf("** para: %s\n", req.parameter);
 
     if (strcmp(req.verb, "QUIT") == 0 || strcmp(req.verb, "ABOR") == 0) {
+        if(status==PASV){
+            close(data_listen_socket); //control socket在主函数处理
+        }
         send_msg(control_socket, "221 Goodbye.\r\n");
         return 1;
     } else if (strcmp(req.verb, "USER") == 0) {
@@ -373,7 +379,7 @@ int handle_request(char *msg) {
                          "530 Only \"anonymous\" can be used.\r\n");
                 return 0;
             }
-        } // TODO ??
+        }
     } else if (strcmp(req.verb, "PASS") == 0) {
         if (status == USER) {
             send_msg(control_socket, "230 Login successful.\r\n");
@@ -544,6 +550,8 @@ int handle_request(char *msg) {
                         printf("connect_to error\n");
                         send_msg(control_socket,
                                  "425 no TCP connection was established\r\n");
+                        status=PASS;
+                        return 0;
                     }
                 } else if (status == PASV) {
                     if ((data_socket =
@@ -553,6 +561,10 @@ int handle_request(char *msg) {
                         close(data_listen_socket);
                         send_msg(control_socket,
                                  "425 no TCP connection was established\r\n");
+                        status=PASS;
+                        return 0;
+                    }else{
+                        close(data_listen_socket);
                     }
                 }
 
@@ -780,7 +792,7 @@ int main(int argc, char *argv[]) {
     printf("listenfd: %d\n", control_listen_socket);
 
     while (1) {
-
+        //为新连接开启新的control socket
         if ((control_socket = accept(control_listen_socket, NULL, NULL)) ==
             -1) {
             printf("Error accept(): %s(%d)\n", strerror(errno), errno);
@@ -791,11 +803,12 @@ int main(int argc, char *argv[]) {
 
         int pid = fork();
         if (pid == 0) {
+            close(control_listen_socket);
+
             // 子进程
             printf("controlfd: %d\n", control_socket);
 
             status = CONNECTED;
-            close(control_listen_socket);
             send_msg(control_socket, "220 Anonymous FTP server ready.\r\n");
 
             while (1) {
@@ -812,12 +825,10 @@ int main(int argc, char *argv[]) {
                 if (handle_request(msg) == 1) {
                     break;
                 }
-
-                // TODO 连接断开
             }
 
             close(control_socket);
-            return 0;
+            exit(0);
         } else {
             close(control_socket); // 记得关！！！
         }
