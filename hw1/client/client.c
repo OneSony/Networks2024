@@ -18,6 +18,9 @@
 #include <regex.h>
 
 
+//TODO 做无状态！！！
+//TODO 错误处理！！！！
+
 //LIST和消息分段有问题！！！
 //连接出现问题的时候，是不是需要把链接部分放在DTP里面？？
 #define SENTENCE_LEN 8192
@@ -139,10 +142,12 @@ int DTP(struct request req) { // TODO 错误处理
 
             char buff[256];
             int n;
+            //printf("retring\n");
             while ((n = read(data_socket, buff, 256)) > 0) { // 从socket读入file
-                sleep(2);
+                //sleep(2);
                 fwrite(buff, 1, n, file);
             }
+            //printf("retr success\n");
 
 
             //pipe可以传输当前传递了多少
@@ -208,7 +213,7 @@ int DTP(struct request req) { // TODO 错误处理
         }
 
 
-        //键盘输入，处理ABOR
+        //TODO 键盘输入，处理ABOR
         //退出问题，等待msg
     }
 
@@ -219,6 +224,7 @@ int DTP(struct request req) { // TODO 错误处理
 void close_DTP(int sig) {
     // 处理 SIGTERM 信号，执行清理操作
     
+    printf("Child process: Received SIGTERM, exiting...\n");
 
     if (file != NULL) {
         fclose(file);
@@ -231,7 +237,7 @@ void close_DTP(int sig) {
     }
     // TODO -1
     close(data_socket);
-    //printf("Child process: Received SIGTERM, exiting...\n");
+    printf("Child process: Received SIGTERM, exiting...\n");
 
     exit(2); //TODO
 }
@@ -243,7 +249,7 @@ int send_msg(int sockfd, char *sentence) {
         int n = write(sockfd, sentence + p, len - p);
         if (n < 0) {
             printf("Error write(): %s(%d)\n", strerror(errno), errno);
-            return -1;
+            return 1;
         } else {
             p += n;
         }
@@ -283,113 +289,6 @@ int rewrite_path(char *str) {
     return 0;
 }
 
-int get_cwd(char *str) {
-    if (getcwd(str, 256) == NULL) {
-        printf("Error getcwd(): %s(%d)\n", strerror(errno), errno);
-        return 1;
-    }
-
-    rewrite_path(str);
-
-    return 0;
-}
-
-int change_dir(char *path) {
-    if (strcmp(path, "..") == 0) {
-        char str[256];
-        getcwd(str, 256);
-        if (strcmp(str, "/") == 0) {
-            return 2;
-        }
-    }
-    if (chdir(path) == -1) {
-        printf("Error chdir(): %s(%d)\n", strerror(errno), errno);
-        return 2;
-    }
-    return 0;
-}
-
-int send_ls(char *path, int socket) {
-    FILE *ls_output;
-    char buffer[1024];
-    char command[256];
-
-    // 构建 ls 命令（指定路径）
-    snprintf(command, sizeof(command), "/bin/ls -l %s", path);
-
-    // 打开 ls 命令的输出（只读模式）
-    ls_output = popen(command, "r");
-    if (ls_output == NULL) {
-        // 如果命令执行失败
-        perror("popen");
-        return 2;
-    }
-
-    // 逐行读取 ls 的输出并通过 socket 发送给客户端
-    while (fgets(buffer, sizeof(buffer), ls_output) != NULL) {
-        size_t len = strlen(buffer);
-        if (buffer[len - 1] == '\n') {
-            buffer[len - 1] = '\r';
-            buffer[len] = '\n';
-            buffer[len + 1] = '\0';
-        }
-        // 发送 ls 命令的输出给客户端
-        if (send(socket, buffer, strlen(buffer), 0) == -1) {
-            perror("send");
-            pclose(ls_output);
-            return -1;
-        }
-        printf("%s", buffer);
-    }
-
-    // 关闭 ls 输出
-    pclose(ls_output);
-    return 0;
-}
-
-int send_ls_old(char *path, int socket) {
-    struct dirent *entry;
-    struct stat file_stat;
-    DIR *dir = opendir(path);
-    if (dir == NULL) {
-        // 错误处理
-        return 2;
-    }
-
-    // 用来存储文件信息的缓冲区
-    char buffer[1024];
-
-    // 逐个读取目录中的文件
-    while ((entry = readdir(dir)) != NULL) {
-        // 跳过当前目录和父目录
-        if (strcmp(entry->d_name, ".") == 0 ||
-            strcmp(entry->d_name, "..") == 0) {
-            continue;
-        }
-
-        // 获取文件的状态信息
-        if (stat(entry->d_name, &file_stat) == -1) {
-            // 错误处理
-            continue;
-        }
-
-        // 构建 EPLF 响应
-        // +i=inode +s=size +m=modification_time +/ filename
-        // inode, size, modification time, name are extracted
-        snprintf(buffer, sizeof(buffer), "+i=%lu +s=%lld +m=%ld%s %s\r\n",
-                 (unsigned long)file_stat.st_ino,       // 文件 inode
-                 (long long)file_stat.st_size,          // 文件大小
-                 (long)file_stat.st_mtime,              // 修改时间
-                 S_ISDIR(file_stat.st_mode) ? "/" : "", // 是否为目录
-                 entry->d_name);                        // 文件名
-        printf("%s", buffer);
-        // 发送给客户端
-        send_msg(socket, buffer);
-    }
-
-    closedir(dir);
-    return 0;
-}
 
 int connect_to(int *sockfd, char *ip, int port) {
     if ((*sockfd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)) == -1) {
@@ -484,41 +383,8 @@ int get_msg(int sockfd, char *sentence) {
         }
     }
     printf("%s", sentence);
+    fflush(stdout);
     regfree(&regex); // 释放正则表达式
-
-    return 0;
-}
-
-int get_msg_old(int sockfd, char *sentence) {
-
-    int p = 0;
-    while (1) {
-        int n = read(sockfd, sentence + p, SENTENCE_LEN - p);
-        if (n < 0) {
-            printf("Error read(): %s(%d)\n", strerror(errno), errno);
-            return -1;
-        } else if (n == 0) {
-            return -1;
-        } else {
-            // p += n;
-            // printf("sentence: %s\n", sentence);
-
-            /*
-            for (int i = 0; i < n; i++) {
-                printf(
-                    "%02x ",
-                    (unsigned char)sentence[p + i]); // 打印每个字节的十六进制值
-            }
-            printf("\n");
-            */
-
-            p += n;
-            if (sentence[p - 2] == '\r' && sentence[p - 1] == '\n') { //TODO 要分开！！！！
-                sentence[p - 2] = '\0';
-                break;
-            }
-        }
-    }
 
     return 0;
 }
@@ -556,51 +422,6 @@ int file_check(char *filename, int *size) {
     return 0;
 }
 
-int send_file(int sockfd, char *filename) {
-    printf("send_file %s\n", filename);
-
-    file = fopen(filename, "rb");
-    if (file == NULL) {
-        printf("Error fopen(): %s(%d)\n", strerror(errno), errno);
-        return 2;
-    }
-
-    // printf("send file %s\n", filename);
-
-    char buff[256];
-    int n;
-    while ((n = fread(buff, 1, 256, file)) > 0) {
-        sleep(0.1);
-        // printf("n: %d\n", n);
-        write(sockfd, buff, n);
-    }
-
-    printf("send file success\n");
-
-    fclose(file);
-    file = NULL;
-    return 0;
-}
-
-int get_file(int sockfd, char *filename) {
-
-    //printf("get_file %s\n", filename);
-    file = fopen(filename, "wb");
-    if (file == NULL) {
-        printf("Error fopen(): %s(%d)\n", strerror(errno), errno);
-        return 1;
-    }
-
-    char buff[256];
-    int n;
-    while ((n = read(sockfd, buff, 256)) > 0) {
-        fwrite(buff, 1, n, file);
-    }
-
-    fclose(file);
-    file = NULL;
-    return 0;
-}
 
 int listen_at(int *sockfd, int port) {
 
@@ -673,9 +494,9 @@ int handle_request(char *sentence) {
     struct request req;
     char msg[SENTENCE_LEN];
     parse_request(sentence, &req);
-    printf("** verb: %s\n", req.verb);
-    printf("** para: %s\n", req.parameter);
-    printf("** len: %ld\n", strlen(req.parameter));
+    //printf("** verb: %s\n", req.verb);
+    //printf("** para: %s\n", req.parameter);
+    //printf("** len: %ld\n", strlen(req.parameter));
 
     if (strcmp(req.verb, "QUIT") == 0 || strcmp(req.verb, "ABOR") == 0) {
         send_msg(control_socket, sentence);
@@ -687,30 +508,11 @@ int handle_request(char *sentence) {
     } else if (strcmp(req.verb, "PASS") == 0) {
         send_msg(control_socket, sentence);
         get_msg(control_socket, msg);
-    } else if (strcmp(req.verb, "SYST") == 0) {
-        send_msg(control_socket, sentence);
-        get_msg(control_socket, msg);
-    } else if (strcmp(req.verb, "TYPE") == 0) {
-        send_msg(control_socket, sentence);
-        get_msg(control_socket, msg);
-    } else if (strcmp(req.verb, "PWD") == 0) {
-        send_msg(control_socket, sentence);
-        get_msg(control_socket, msg);
-    } else if (strcmp(req.verb, "CWD") == 0) {
-        //TODO 解析？？？？回复
-        send_msg(control_socket, sentence);
-        get_msg(control_socket, msg);
-    } else if (strcmp(req.verb, "MKD") == 0) {
-        send_msg(control_socket, sentence);
-        get_msg(control_socket, msg);
-    } else if (strcmp(req.verb, "RMD") == 0) {
+    } else if (strcmp(req.verb, "SYST") == 0||strcmp(req.verb, "TYPE") == 0|| strcmp(req.verb, "PWD") == 0 || strcmp(req.verb, "CWD") == 0 || strcmp(req.verb, "MKD") == 0 || strcmp(req.verb, "RMD") == 0) {
         send_msg(control_socket, sentence);
         get_msg(control_socket, msg);
     } else if (strcmp(req.verb, "PORT") == 0) {
         //TODO 好像不需要记录PORT的信息
-
-        //用户需要输入port!!!
-
 
         if(status==PORT){
             close(data_listen_socket);
@@ -718,27 +520,24 @@ int handle_request(char *sentence) {
 
         if(strcmp(req.parameter, "")==0){ //未指定
 
-            int port;
-
             while (1) { // 随机选一个端口
-                port =
+                pasv_mode_info.port =
                     rand() % (MAX_PORT - MIN_PORT + 1) + MIN_PORT;
                 //printf("**data_port: %d\n", port);
-                if (listen_at(&data_listen_socket, port) == 0) {
+                if (listen_at(&data_listen_socket, pasv_mode_info.port) == 0) {
                     break;
                 }
             }
 
-            //int p1, p2, p3, p4;
-            //sscanf(pasv_mode_info.ip, "%d.%d.%d.%d", &p1, &p2, &p3, &p4);
+            int p1, p2, p3, p4;
+            sscanf(pasv_mode_info.ip, "%d.%d.%d.%d", &p1, &p2, &p3, &p4);
 
             char buff[256];
-            //sprintf(buff, "227 Entering Passive Mode (%d,%d,%d,%d,%d,%d).\r\n",
-            //        p1, p2, p3, p4, pasv_mode_info.port / 256,
-            //        pasv_mode_info.port % 256);
-            sprintf(buff, "PORT 127,0,0,1,%d,%d\r\n",
-                    port / 256,
-                    port % 256);
+            sprintf(buff, "PORT %d,%d,%d,%d,%d,%d\r\n",
+                    p1,p2,p3,p4,
+                    pasv_mode_info.port / 256,
+                    pasv_mode_info.port % 256);
+
             send_msg(control_socket, buff);
             get_msg(control_socket, msg);
 
@@ -747,10 +546,11 @@ int handle_request(char *sentence) {
 
             if(res.code[0]=='2'){
                 status=PORT;
+            }else{
+                close(data_listen_socket);
             }
 
         }else{//指定了
-        //TODO 如果被占用了
 
             int ip1, ip2, ip3, ip4, port1, port2;
             sscanf(req.parameter, "%d,%d,%d,%d,%d,%d", &ip1, &ip2, &ip3, &ip4, &port1, &port2);
@@ -760,6 +560,9 @@ int handle_request(char *sentence) {
                 return 0;
             }
 
+            sprintf(pasv_mode_info.ip, "%d.%d.%d.%d", ip1, ip2, ip3, ip4);
+            pasv_mode_info.port=port1*256+port2;
+
             send_msg(control_socket, sentence);
             get_msg(control_socket, msg);
 
@@ -768,6 +571,8 @@ int handle_request(char *sentence) {
 
             if(res.code[0]=='2'){
                 status=PORT;
+            }else{
+                close(data_listen_socket);
             }
         }
 
@@ -811,7 +616,7 @@ int handle_request(char *sentence) {
 
         status=PASS;
     } else {
-        //printf("Error: Unsupport command\n");
+        printf("Unsupport command\n");
     }
 
     return 0;
@@ -819,11 +624,10 @@ int handle_request(char *sentence) {
 
 int main(int argc, char *argv[]) {
 
-    //signal(SIGINT, SIG_IGN);
-
-    
 	char server_ip[16] = "127.0.0.1";
 	int server_port = 21;
+
+    strcpy(pasv_mode_info.ip, server_ip);
 
 
     for (int i = 1; i < argc; i++) {
@@ -832,7 +636,7 @@ int main(int argc, char *argv[]) {
                 strcpy(server_ip, argv[i + 1]); // 获取根目录字符串
                 i++;                                 // 跳过参数
             } else {
-                fprintf(stderr, "Error: -root requires an argument\n");
+                fprintf(stderr, "Error: -ip requires an argument\n");
                 exit(EXIT_FAILURE);
             }
         } else if (strcmp(argv[i], "-port") == 0) {
@@ -844,7 +648,7 @@ int main(int argc, char *argv[]) {
                 exit(EXIT_FAILURE);
             }
         } else {
-            fprintf(stderr, "Usage: %s -port <port> -root <root_directory>\n",
+            fprintf(stderr, "Usage: %s -ip <x.x.x.x> -port <port>\n",
                     argv[0]);
             exit(EXIT_FAILURE);
         }
@@ -855,25 +659,25 @@ int main(int argc, char *argv[]) {
 
 
     if(0!=connect_to(&control_socket, server_ip, server_port)){
+        printf("cannot connect to the server\n");
 		return 1;
 	}
 
-    status=CONNECTED;
-
     //欢迎信息
     char msg[SENTENCE_LEN];
-    get_msg(control_socket, msg);
+    if(-1==get_msg(control_socket, msg)){
+        printf("cannot get welcome message\n");
+        return 1;
+    }
 
 
     while (1) {
-
-
         //用户输入
         char sentence[SENTENCE_LEN];
 
-        printf("myftp> ");
+        //printf("myftp> ");
         //fflush(stdin);
-        fgets(sentence, 4096, stdin);
+        fgets(sentence, SENTENCE_LEN-1, stdin);
 		int len = strlen(sentence);
 		sentence[len-1] = '\r';
 		sentence[len] = '\n';
@@ -885,7 +689,7 @@ int main(int argc, char *argv[]) {
             break;
         }
 
-		printf("status: %d\n",status);
+		//printf("status: %d\n",status);
 
 
         //TODO status!!!
