@@ -93,22 +93,25 @@ int p_fds[2];
 
 
 int DTP(struct request req) { // TODO 错误处理
-
-    if (pipe(p_fds) == -1) {
-        perror("pipe");
-        exit(1);
-    }
+//DTP遇到问题就退出，主进程等server发消息
+//主进程不需要给DTP发消息，DTP自己处理
+//检查一下是不是真的会退出
 
     int pid = fork();
     if (pid == 0) { // 创建DTP
+        signal(SIGINT, close_DTP);
+
+        //正常传输退出 0
+        //异常退出 1
+        //ctrl + c退出 2
         close(control_socket);
 
         if (status == PORT) {
 
-            if ((data_socket = accept(data_listen_socket, NULL, NULL)) == -1) {
+            if ((data_socket = accept(data_listen_socket, NULL, NULL)) == -1) { //TODO 超时
                 printf("Error accept(): %s(%d)\n", strerror(errno), errno);
                 close(data_listen_socket);
-                status = PASS;
+                exit(1);
             } else {
                 close(data_listen_socket);
             }
@@ -118,30 +121,11 @@ int DTP(struct request req) { // TODO 错误处理
             if (0 !=
                 connect_to(&data_socket, pasv_mode_info.ip, pasv_mode_info.port)) {
                 printf("connect_to error\n");
-                status = PASS;
+                exit(1);
             }
         }
-
-
-        //等待150
-        char msg[SENTENCE_LEN];
-        read(p_fds[0], msg, SENTENCE_LEN); // 从管道读取数据
-        printf("*DTP msg: %s\n", msg);
-        if(strcmp(msg, "ok")!=0){
-            //拆除
-            close(data_socket);
-            close(p_fds[0]); // 关闭管道的读取端
-            close(p_fds[1]); // 关闭管道的写入端
-            close(data_listen_socket); //TODO
-            exit(1);
-        }
-
 
         //开始传输
-        signal(SIGINT, close_DTP);
-        close(p_fds[0]); // 关闭管道的读取端
-
-        int pid_signal = 0; // TODO
 
         if (strcmp(req.verb, "RETR") == 0) {
 
@@ -149,11 +133,14 @@ int DTP(struct request req) { // TODO 错误处理
             file = fopen(req.parameter, "wb");
             if (file == NULL) {
                 printf("Error fopen(): %s(%d)\n", strerror(errno), errno);
+                close(data_socket);
+                exit(1);
             }
 
             char buff[256];
             int n;
             while ((n = read(data_socket, buff, 256)) > 0) { // 从socket读入file
+                sleep(2);
                 fwrite(buff, 1, n, file);
             }
 
@@ -168,14 +155,13 @@ int DTP(struct request req) { // TODO 错误处理
             file = fopen(req.parameter, "rb");
             if (file == NULL) {
                 printf("Error fopen(): %s(%d)\n", strerror(errno), errno);
-                pid_signal = 2;
+                close(data_socket);
+                exit(1);
             }
 
             char buff[256];
             int n;
             while ((n = fread(buff, 1, 256, file)) > 0) { // 从file读入sockt
-                // sleep(0.1);
-                //  printf("n: %d\n", n);
                 write(data_socket, buff, n);
             }
 
@@ -195,226 +181,37 @@ int DTP(struct request req) { // TODO 错误处理
 
             if (n == -1) {
                 perror("recv");
-            } else if (n == 0) {
-                //printf("Connection closed by peer.\n");//TODO 这样不对！！！
+                close(data_socket);
+                exit(1);
             }
 
         }
 
         close(data_socket);
-        //printf("**end send file success\n");
-
-        //write(p_fds[1], &pid_signal, sizeof(pid_signal)); // 向管道写入数据
-        close(p_fds[1]); // 关闭管道的写入端
         exit(0);
     } else {
-        signal(SIGINT, SIG_IGN);
+        signal(SIGINT, SIG_IGN); //TODO
+
+
+        int pid_signal;
+        waitpid(pid, &pid_signal, 0); // 等待子进程结束
+        signal(SIGINT, SIG_DFL);
+
 
         char msg[SENTENCE_LEN];
 
-        get_msg(control_socket, msg); //150
-        struct response res;
-        parse_response(msg, &res);
-
-        if(res.code[0]!='1'){
-            printf("Error: %s\n", msg);
-            write(p_fds[1], "end", sizeof("end")); // 向管道写入数据
-        }else{
-            //通知子进程
-            write(p_fds[1], "ok", sizeof("ok")); // 向管道写入数据
-        }
-
-
-        int pid_signal;
-        waitpid(pid, &pid_signal, 0); // 等待子进程结束
-        //printf("Child process exited with status %d\n", pid_signal);
-
-        close(p_fds[1]);
-
-        close(p_fds[0]);
-
-        if(WEXITSTATUS(pid_signal)==5){//被退出  注意是WEXITSTATUS
-            send_msg(control_socket, "ABOR\r\n");
-
-            get_msg(control_socket, msg);
-
-
-            get_msg(control_socket, msg);
-        }else if(WEXITSTATUS(pid_signal)==1){
-            //do nothing
-        }else{
-            char msg[SENTENCE_LEN];
-            get_msg(control_socket, msg); //226
-
-        }
-        signal(SIGINT, SIG_DFL);
-        
-    }
-
-
-    return 0;
-}
-
-int DTP_old(struct request req) { // TODO 错误处理
-
-    // 建立连接
-    //TODO 应该挪到进程里面？？不然怎么听到control的消息
-    if (status == PORT) {
-
-        if ((data_socket = accept(data_listen_socket, NULL, NULL)) == -1) {
-            printf("Error accept(): %s(%d)\n", strerror(errno), errno);
-            close(data_listen_socket);
-            
+        if(WEXITSTATUS(pid_signal)==2){//被退出  注意是WEXITSTATUS
             //TODO
-            //send_msg(control_socket,
-            //         "ABOR\r\n");
-            status = PASS;
-            return 0;
-        } else {
-            close(data_listen_socket);
-        }
-
-    } else if (status == PASV) {
-        // TODO
-        if (0 !=
-            connect_to(&data_socket, pasv_mode_info.ip, pasv_mode_info.port)) {
-            printf("connect_to error\n");
-            
-            //TODO
-            //send_msg(control_socket,
-            //         "425 no TCP connection was established\r\n");
-            status = PASS;
-            return 0;
-        }
-    }
-
-    //printf("accept success\n");
-    
-    char msg[SENTENCE_LEN];
-    get_msg(control_socket, msg); //150
-
-    //TODO if() 150!!!!
-
-    // int p_fds[2]; //父子进程通讯通道
-    if (pipe(p_fds) == -1) {
-        perror("pipe");
-        exit(1);
-    }
-
-    //printf("pipe success\n");
-
-    int pid = fork();
-    if (pid == 0) { // 创建DTP
-
-        signal(SIGINT, close_DTP);
-        close(control_socket);
-        close(p_fds[0]); // 关闭管道的读取端
-
-        int pid_signal = 0; // TODO
-
-        if (strcmp(req.verb, "RETR") == 0) {
-
-            //printf("get_file %s\n", req.parameter);
-            file = fopen(req.parameter, "wb");
-            if (file == NULL) {
-                printf("Error fopen(): %s(%d)\n", strerror(errno), errno);
-            }
-
-            char buff[256];
-            int n;
-            while ((n = read(data_socket, buff, 256)) > 0) { // 从socket读入file
-                fwrite(buff, 1, n, file);
-            }
-
-
-            //pipe可以传输当前传递了多少
-
-            fclose(file);
-            file = NULL;
-
-        } else if (strcmp(req.verb, "STOR") == 0) {
-
-            // FILE open
-
-            //printf("get_file %s\n", req.parameter);
-
-            file = fopen(req.parameter, "rb");
-            if (file == NULL) {
-                printf("Error fopen(): %s(%d)\n", strerror(errno), errno);
-                pid_signal = 2;
-            }
-
-            char buff[256];
-            int n;
-            while ((n = fread(buff, 1, 256, file)) > 0) { // 从file读入sockt
-                // sleep(0.1);
-                //  printf("n: %d\n", n);
-                write(data_socket, buff, n);
-            }
-
-            //printf("send file success\n");
-
-            fclose(file);
-            file = NULL;
-
-        } else if (strcmp(req.verb, "LIST") == 0) {//TODO我怎么知道什么时候结束
-            char buffer[1024];
-            int n;
-
-            while ((n = recv(data_socket, buffer, sizeof(buffer) - 1, 0)) > 0) {
-                buffer[n] = '\0'; // 确保缓冲区是一个有效的字符串
-                printf("%s", buffer);  // 打印接收到的消息
-            }
-
-            if (n == -1) {
-                perror("recv");
-            } else if (n == 0) {
-                //printf("Connection closed by peer.\n");//TODO 这样不对！！！
-            }
-
-        }
-
-        close(data_socket);
-        //printf("**end send file success\n");
-
-        write(p_fds[1], &pid_signal, sizeof(pid_signal)); // 向管道写入数据
-        close(p_fds[1]); // 关闭管道的写入端
-        exit(0);
-    } else {
-
-        signal(SIGINT, SIG_IGN);
-
-        //TODO
-        close(data_socket);
-        close(p_fds[1]);
-
-
-        //接收当前传递了多少
-
-        //等子进程结束
-
-        // 清理
-        close(p_fds[0]);
-
-        int pid_signal;
-        waitpid(pid, &pid_signal, 0); // 等待子进程结束
-        //printf("Child process exited with status %d\n", pid_signal);
-
-        if(WEXITSTATUS(pid_signal)==5){//被退出  注意是WEXITSTATUS
-            send_msg(control_socket, "ABOR\r\n");
-
-            char msg[SENTENCE_LEN];
-            get_msg(control_socket, msg);
-
-            get_msg(control_socket, msg);
+            get_msg(control_socket, msg); //150
         }else{
-            char msg[SENTENCE_LEN];
-            get_msg(control_socket, msg); //226
-
+            get_msg(control_socket, msg); //150
         }
-        signal(SIGINT, SIG_DFL);
-        
+
+
+        //键盘输入，处理ABOR
+        //退出问题，等待msg
     }
+
 
     return 0;
 }
@@ -434,10 +231,9 @@ void close_DTP(int sig) {
     }
     // TODO -1
     close(data_socket);
-    close(p_fds[1]); // 关闭管道的写入端
     //printf("Child process: Received SIGTERM, exiting...\n");
 
-    exit(5); //TODO
+    exit(2); //TODO
 }
 
 int send_msg(int sockfd, char *sentence) {
@@ -995,43 +791,24 @@ int handle_request(char *sentence) {
 
             status=PASV;
         }
-    } else if (strcmp(req.verb, "RETR") == 0) {
+    } else if (strcmp(req.verb, "RETR") == 0 || strcmp(req.verb, "STOR") == 0 || strcmp(req.verb, "LIST") == 0) {
         //TODO
         //到当前目录
         if(status==PORT || status==PASV){
             send_msg(control_socket, sentence);
-            DTP(req);
-        }else{
-            printf("Error: PORT or PASV not established\n");
-        }
-
-        status=PASS;
-    } else if (strcmp(req.verb, "STOR") == 0) { // TODO
-    //目前是到当前目录
-        if(status==PORT || status==PASV){
-
-            int ret = file_check(req.parameter, NULL);
-
-            if (ret == 1) {
-                printf("Error: Invalid file path, cannot contain ..\n");
-            } else if (ret == 2) {
-                printf("Error: File does not exist\n");
-            } else if (ret == 0) {
-                send_msg(control_socket, sentence);
+            char msg[SENTENCE_LEN];
+            get_msg(control_socket, msg);
+            struct response res;
+            parse_response(msg, &res);
+            if(res.code[0]=='1'){//可以连接
                 DTP(req);
+            }else{
+                printf("Error: %s\n", msg);
             }
         }else{
             printf("Error: PORT or PASV not established\n");
         }
 
-        status=PASS;
-    } else if (strcmp(req.verb, "LIST") == 0) { // TODO total是什么？？？？？？？
-        if(status==PORT || status==PASV){
-            send_msg(control_socket, sentence);
-            DTP(req);
-        }else{
-            printf("Error: PORT or PASV not established\n");
-        }
         status=PASS;
     } else {
         //printf("Error: Unsupport command\n");
