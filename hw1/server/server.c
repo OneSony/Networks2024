@@ -1,7 +1,7 @@
 #include "server.h"
-
-// control socket: USER PASS QUIT SYST TYPE PORT PASV MKD CWD PWD
-// data socket: RETR STOR LIST
+// SOCKET 初始化！！！！！！！！！！
+//  control socket: USER PASS QUIT SYST TYPE PORT PASV MKD CWD PWD
+//  data socket: RETR STOR LIST
 
 // TODO 获取本机ip
 // TODO CWD空？
@@ -23,13 +23,12 @@ FILE *pfile = NULL;
 
 int p_fds[2];
 
-int DTP(struct request req) { // TODO 错误处理
+int DTP(struct request req) {
 
     send_msg(control_socket, "150 Opening BINARY mode data connection.\r\n");
 
     // 建立连接
     if (status == PORT) {
-        // TODO
         if (0 !=
             connect_to(&data_socket, port_mode_info.ip, port_mode_info.port)) {
             printf("connect_to error\n");
@@ -53,7 +52,6 @@ int DTP(struct request req) { // TODO 错误处理
 
     printf("accept success\n");
 
-
     // int p_fds[2]; //父子进程通讯通道
     if (pipe(p_fds) == -1) {
         perror("pipe");
@@ -65,15 +63,15 @@ int DTP(struct request req) { // TODO 错误处理
     int pid = fork();
     if (pid == 0) { // 创建DTP
 
-        //正常传输退出 0
-        //异常退出 1
-        //ctrl + c退出 2
-        //用pipe传递消息
+        // 正常传输退出 0
+        // 异常退出 1
+        // ctrl + c退出 2
+        // 用pipe传递消息
         signal(SIGTERM, close_DTP);
         close(control_socket);
         close(p_fds[0]); // 关闭管道的读取端
 
-        int pid_signal; // TODO
+        int pid_signal;
 
         if (strcmp(req.verb, "RETR") == 0) {
 
@@ -92,7 +90,7 @@ int DTP(struct request req) { // TODO 错误处理
             char buff[256];
             int n;
             while ((n = fread(buff, 1, 256, file)) > 0) { // 从file读入sockt
-                if(write(data_socket, buff, n) == -1){
+                if (write(data_socket, buff, n) == -1) {
                     fclose(file);
                     file = NULL;
                     perror("write");
@@ -126,8 +124,8 @@ int DTP(struct request req) { // TODO 错误处理
             char buff[256];
             int n;
             while ((n = read(data_socket, buff, 256)) > 0) { // 从socket读入file
-                fwrite(buff, 1, n, file);//本地文件！
-            } //TODO 是不知道发送完的！
+                fwrite(buff, 1, n, file);                    // 本地文件！
+            } // TODO 是不知道发送完的！
 
             fclose(file);
             file = NULL;
@@ -141,7 +139,8 @@ int DTP(struct request req) { // TODO 错误处理
             }
 
             // 构建 ls 命令（指定路径）
-            snprintf(command, sizeof(command), "/bin/ls -l %s", req.parameter); //第一行是总大小！！！？TODO
+            snprintf(command, sizeof(command), "/bin/ls -l %s",
+                     req.parameter); // 第一行是总大小！！！？TODO
             printf("command: %s\n", command);
 
             // 打开 ls 命令的输出（只读模式）
@@ -156,9 +155,8 @@ int DTP(struct request req) { // TODO 错误处理
                 exit(1);
             }
 
-
-            //有问题！！！！！！！！！！！！！
-            // 逐行读取 ls 的输出并通过 socket 发送给客户端
+            // 有问题！！！！！！！！！！！！！
+            //  逐行读取 ls 的输出并通过 socket 发送给客户端
             while (fgets(buffer, sizeof(buffer), pfile) != NULL) {
                 size_t len = strlen(buffer);
                 if (buffer[len - 1] == '\n') {
@@ -166,9 +164,7 @@ int DTP(struct request req) { // TODO 错误处理
                     buffer[len] = '\n';
                     buffer[len + 1] = '\0';
                 }
-                // 发送 ls 命令的输出给客户端
-                // TODO
-                // 循环发送！！！！！！！！！！！！！！！！！！！！！！！！！也不需要，这是一行一行发送
+
                 if (send(data_socket, buffer, strlen(buffer), 0) == -1) {
                     perror("send");
                     pclose(pfile);
@@ -225,10 +221,15 @@ int DTP(struct request req) { // TODO 错误处理
                 printf("Control process: have msg.\n");
                 // get msg
                 char msg[SENTENCE_LEN];
-                if (0 != get_msg(control_socket, msg)) {
-                    printf("get_msg error\n");
-                    // TODO 清空port连接断开？？？？
-                    break;
+                if (0 != get_msg(control_socket, msg)) { // 主进程断开 TODO
+                    printf("connection error\n");
+                    // TODO 清空port
+                    kill(pid, SIGTERM);
+                    waitpid(pid, NULL, 0); // 等待子进程终止
+                    close(p_fds[0]);
+                    close(control_socket);
+                    printf("exit\n");
+                    exit(0);
                 }
 
                 printf("msg: %s\n", msg);
@@ -265,10 +266,9 @@ int DTP(struct request req) { // TODO 错误处理
                     send_msg(
                         control_socket,
                         "451  had trouble reading the file from disk.\r\n");
-                } else if (ret == 2) {  
-                    send_msg(control_socket,
-                             "426 Transfer aborted.\r\n");
-                    
+                } else if (ret == 2) {
+                    send_msg(control_socket, "426 Transfer aborted.\r\n");
+
                 } else {
                     send_msg(control_socket, "500 Internal error.\r\n");
                 }
@@ -460,7 +460,6 @@ int file_check(char *filename, int *size) {
 
     return 0;
 }
-
 
 int listen_at(int *sockfd, int port) {
 
@@ -673,7 +672,7 @@ int handle_request(char *msg) {
             return 0;
         }
     } else if (strcmp(req.verb, "PASV") == 0) {
-        // TODO 什么时候建立连接？？是对的？因为我已经listen了
+
         if (status == PASS || status == PASV ||
             status == PORT) { // 已开PASV重新更新
 
@@ -727,7 +726,7 @@ int handle_request(char *msg) {
 
         status = PASS;
         return 0;
-    } else if (strcmp(req.verb, "STOR") == 0) { // TODO
+    } else if (strcmp(req.verb, "STOR") == 0) {
         if (status == PORT || status == PASV) {
 
             if (path_check(req.parameter) != 0) {
@@ -742,7 +741,7 @@ int handle_request(char *msg) {
 
         status = PASS;
         return 0;
-    } else if (strcmp(req.verb, "LIST") == 0) { // TODO
+    } else if (strcmp(req.verb, "LIST") == 0) {
         if (status == PORT || status == PASV) {
             DTP(req);
         } else {
@@ -826,7 +825,11 @@ int main(int argc, char *argv[]) {
                 printf("in the loop! status:%d\n", status);
                 char msg[SENTENCE_LEN];
                 if (0 != get_msg(control_socket, msg)) {
-                    printf("get_msg error\n");
+
+                    printf("connection error\n");
+                    if (status == PASV) {
+                        close(data_listen_socket); // control socket在主函数处理
+                    }
                     // TODO 清空port
                     break;
                 }
