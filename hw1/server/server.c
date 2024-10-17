@@ -23,7 +23,7 @@ FILE *pfile = NULL;
 
 int p_fds[2];
 
-int DTP(struct request req) { //TODO 错误处理
+int DTP(struct request req) { // TODO 错误处理
 
     // 建立连接
     if (status == PORT) {
@@ -66,9 +66,9 @@ int DTP(struct request req) { //TODO 错误处理
         close(control_socket);
         close(p_fds[0]); // 关闭管道的读取端
 
-        int pid_signal = 0; //TODO
+        int pid_signal = 0; // TODO
 
-        if (strcmp(req.verb, "RETR")==0) {
+        if (strcmp(req.verb, "RETR") == 0) {
 
             // FILE open
 
@@ -82,9 +82,9 @@ int DTP(struct request req) { //TODO 错误处理
 
             char buff[256];
             int n;
-            while ((n = fread(buff, 1, 256, file)) > 0) {//从file读入sockt
-                //sleep(0.1);
-                // printf("n: %d\n", n);
+            while ((n = fread(buff, 1, 256, file)) > 0) { // 从file读入sockt
+                // sleep(0.1);
+                //  printf("n: %d\n", n);
                 write(data_socket, buff, n);
             }
 
@@ -93,7 +93,7 @@ int DTP(struct request req) { //TODO 错误处理
             fclose(file);
             file = NULL;
 
-        } else if (strcmp(req.verb, "STOR")==0) {
+        } else if (strcmp(req.verb, "STOR") == 0) {
 
             printf("get_file %s\n", req.parameter);
             file = fopen(req.parameter, "wb");
@@ -103,14 +103,14 @@ int DTP(struct request req) { //TODO 错误处理
 
             char buff[256];
             int n;
-            while ((n = read(data_socket, buff, 256)) > 0) { //从socket读入file
+            while ((n = read(data_socket, buff, 256)) > 0) { // 从socket读入file
                 fwrite(buff, 1, n, file);
             }
 
             fclose(file);
             file = NULL;
 
-        } else if (strcmp(req.verb, "LIST")==0) {
+        } else if (strcmp(req.verb, "LIST") == 0) {
             char buffer[1024];
             char command[1025];
 
@@ -129,6 +129,8 @@ int DTP(struct request req) { //TODO 错误处理
                 perror("popen");
             }
 
+
+            //有问题！！！！！！！！！！！！！
             // 逐行读取 ls 的输出并通过 socket 发送给客户端
             while (fgets(buffer, sizeof(buffer), pfile) != NULL) {
                 size_t len = strlen(buffer);
@@ -138,18 +140,19 @@ int DTP(struct request req) { //TODO 错误处理
                     buffer[len + 1] = '\0';
                 }
                 // 发送 ls 命令的输出给客户端
-                //TODO 循环发送！！！！！！！！！！！！！！！！！！！！！！！！！也不需要，这是一行一行发送
+                // TODO
+                // 循环发送！！！！！！！！！！！！！！！！！！！！！！！！！也不需要，这是一行一行发送
                 if (send(data_socket, buffer, strlen(buffer), 0) == -1) {
                     perror("send");
                     pclose(pfile);
-                    pfile=NULL;
+                    pfile = NULL;
                 }
                 printf("%s", buffer);
             }
 
             // 关闭 ls 输出
             pclose(pfile);
-            pfile=NULL;
+            pfile = NULL;
         }
 
         close(data_socket);
@@ -253,11 +256,11 @@ void close_DTP(int sig) {
         file = NULL;
     }
 
-    if(pfile!=NULL){
+    if (pfile != NULL) {
         pclose(pfile);
-        pfile=NULL;
+        pfile = NULL;
     }
-    //TODO -1
+    // TODO -1
     close(data_socket);
     close(p_fds[1]); // 关闭管道的写入端
     printf("Child process: Received SIGTERM, exiting...\n");
@@ -806,13 +809,13 @@ int handle_request(char *msg) {
             } else if (ret == 2) {
                 send_msg(control_socket, "451 This is not a file.\r\n");
             } else if (ret == 0) {
+                printf("in RETR\n");
                 DTP(req);
             }
         } else {
             send_msg(control_socket,
                      "425 no TCP connection was established\r\n");
         }
-
 
         status = PASS;
         return 0;
@@ -1012,7 +1015,6 @@ int handle_request(char *msg) {
         */
     } else if (strcmp(req.verb, "STOR") == 0) { // TODO
         if (status == PORT || status == PASV) {
-            
 
             if (path_check(req.parameter) != 0) {
                 send_msg(control_socket,
@@ -1021,8 +1023,7 @@ int handle_request(char *msg) {
                 DTP(req);
             }
 
-
-            //TODO 如果文件存在？？？？
+            // TODO 如果文件存在？？？？
             /*
 
             if (path_check(req.parameter) != 0) {

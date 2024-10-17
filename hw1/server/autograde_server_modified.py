@@ -21,6 +21,9 @@ class TestServer:
         while True:
             stdout = proc.stdout.readline()
             stderr = proc.stderr.readline()
+            
+            stdout = stdout.decode('utf-8') if stdout else ''
+            stderr = stderr.decode('utf-8') if stderr else ''
             if not (stdout and stderr):
                 break
             if stdout and '-Wall' not in stdout:
