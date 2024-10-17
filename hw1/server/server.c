@@ -23,6 +23,16 @@ FILE *pfile = NULL;
 
 int p_fds[2];
 
+int basename(char *path, char *filename) {
+    char *p = strrchr(path, '/');
+    if (p == NULL) {
+        strcpy(filename, path);
+    } else {
+        strcpy(filename, p + 1);
+    }
+    return 0;
+}
+
 int DTP(struct request req) {
 
     send_msg(control_socket, "150 Opening BINARY mode data connection.\r\n");
@@ -111,7 +121,10 @@ int DTP(struct request req) {
         } else if (strcmp(req.verb, "STOR") == 0) {
 
             printf("get_file %s\n", req.parameter);
-            file = fopen(req.parameter, "wb");
+            char filename[256];
+            basename(req.parameter, filename);
+            printf("filename: %s\n", filename);
+            file = fopen(filename, "wb");
             if (file == NULL) {
                 printf("Error fopen(): %s(%d)\n", strerror(errno), errno);
                 pid_signal = 1;
@@ -263,9 +276,8 @@ int DTP(struct request req) {
                 if (ret == 0) {
                     send_msg(control_socket, "226 Transfer complete.\r\n");
                 } else if (ret == 1) {
-                    send_msg(
-                        control_socket,
-                        "451  had trouble reading the file from disk.\r\n");
+                    send_msg(control_socket,
+                             "451 Had trouble reading the file from disk.\r\n");
                 } else if (ret == 2) {
                     send_msg(control_socket, "426 Transfer aborted.\r\n");
 
@@ -534,12 +546,22 @@ int handle_request(char *msg) {
     printf("** verb: %s\n", req.verb);
     printf("** para: %s\n", req.parameter);
 
-    if (strcmp(req.verb, "QUIT") == 0 || strcmp(req.verb, "ABOR") == 0) {
+    if (strcmp(req.verb, "QUIT") == 0) {
         if (status == PASV) {
             close(data_listen_socket); // control socket在主函数处理
         }
         send_msg(control_socket, "221 Goodbye.\r\n");
         return 1;
+    } else if (strcmp(req.verb, "ABOR") == 0) {
+        if (status == PASS) {
+            send_msg(control_socket, "225 No transfer to abort.\r\n");
+        } else if (status == PASV) {
+            close(data_socket);
+            send_msg(control_socket, "225 ABOR command successful.\r\n");
+        } else if (status == PORT) {
+            send_msg(control_socket, "225 ABOR command successful.\r\n");
+        }
+        status = PASS;
     } else if (strcmp(req.verb, "USER") == 0) {
         if (status == CONNECTED) {
             if (strcmp(req.parameter, "anonymous") == 0) {
