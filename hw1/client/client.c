@@ -613,7 +613,7 @@ int handle_request(char *sentence) {
             DTP(req);
         }
 
-        status = PASS;
+        //status = PASS; 这样会导致下次传输的时候不知道用PORT还是PASV
     } else {
         printf("Unsupport command\n");
     }
