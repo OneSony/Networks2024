@@ -4,7 +4,6 @@
 //  data socket: RETR STOR LIST
 
 // TODO 获取本机ip
-// TODO CWD空？
 
 enum user_status status;
 
@@ -21,6 +20,10 @@ struct pasv_mode_info_s pasv_mode_info;
 FILE *file = NULL;
 FILE *pfile = NULL;
 
+char root_directory[256];
+
+// TODO 路径需要换算
+
 int p_fds[2];
 
 int basename(char *path, char *filename) {
@@ -33,7 +36,46 @@ int basename(char *path, char *filename) {
     return 0;
 }
 
-int DTP(struct request req) {
+// TODO RMD CMD STOR RETR LIST<可以接受参数！！>
+// TODO ABOR和REST
+
+// TODO 把越界写道convert里面吧
+int path_convert(char *path) { // 输入client的路径，输出server中的绝对路径
+    char server_path[600];
+    if (path[0] == '/') { // Absolute path
+        strcpy(server_path, root_directory);
+        strcat(server_path, path);
+    } else {
+        strcpy(server_path, path);
+    }
+
+    printf("server_path: %s\n", server_path);
+
+    char resolved_path[800];
+
+    if (realpath(server_path, resolved_path) == NULL) { // 不存在
+        perror("realpath error for root\n");
+        return 1;
+    }
+
+    printf("resolved_path: %s\n", resolved_path);
+
+    if (resolved_path[strlen(resolved_path) - 1] ==
+        '/') { // root_directory最后不含"/"
+        resolved_path[strlen(resolved_path) - 1] = '\0';
+    }
+
+    if (strncmp(resolved_path, root_directory, strlen(root_directory)) !=
+        0) { // 越界了
+        return 2;
+    }
+
+    strcpy(path, resolved_path);
+
+    return 0;
+}
+
+int DTP(struct request req) { // 这里的路径要直接可以操作
 
     send_msg(control_socket, "150 Opening BINARY mode data connection.\r\n");
 
@@ -121,10 +163,8 @@ int DTP(struct request req) {
         } else if (strcmp(req.verb, "STOR") == 0) {
 
             printf("get_file %s\n", req.parameter);
-            char filename[256];
-            basename(req.parameter, filename);
-            printf("filename: %s\n", filename);
-            file = fopen(filename, "wb");
+
+            file = fopen(req.parameter, "wb");
             if (file == NULL) {
                 printf("Error fopen(): %s(%d)\n", strerror(errno), errno);
                 pid_signal = 1;
@@ -147,13 +187,9 @@ int DTP(struct request req) {
             char buffer[1024];
             char command[1025];
 
-            if (strcmp(req.parameter, "") == 0) {
-                strcpy(req.parameter, ".");
-            }
-
             // 构建 ls 命令（指定路径）
             snprintf(command, sizeof(command), "/bin/ls -l %s",
-                     req.parameter); // 第一行是总大小！！！？TODO
+                     req.parameter); // TODO 第一行是总大小！！！
             printf("command: %s\n", command);
 
             // 打开 ls 命令的输出（只读模式）
@@ -367,23 +403,70 @@ int get_cwd(char *str) {
         return 1;
     }
 
+    // add "/"
+    if (str[strlen(str) - 1] != '/') {
+        strcat(str, "/");
+    }
+
+    printf("ori cwd: %s\n", str);
+
+    // remove root_directory
+    int len = strlen(root_directory);
+    printf("%d\n", len);
+    printf("root: %s\n", root_directory);
+    if (strncmp(str, root_directory, len) == 0) {
+        strcpy(str, str + len);
+    }
+    printf("cwd str: %s\n", str);
+
     rewrite_path(str);
 
     return 0;
 }
 
-int change_dir(char *path) {
-    if (strcmp(path, "..") == 0) {
-        char str[256];
-        getcwd(str, 256);
-        if (strcmp(str, "/") == 0) {
-            return 2;
-        }
+int change_dir(char *ori_path) { // 只在server服务中使用, 返回值最后不含/
+
+    char path[256];
+    strcpy(path, ori_path);
+    path_convert(path); // conver to server
+    printf("converted: %s\n", path);
+
+    char resolved_path[600];
+
+    if (realpath(path, resolved_path) == NULL) {
+        perror("realpath error for root");
+        return 1;
     }
+
+    printf("resolved_path: %s\n", resolved_path);
+
+    if (resolved_path[strlen(resolved_path) - 1] ==
+        '/') { // root_directory最后不含"/"
+        resolved_path[strlen(resolved_path) - 1] = '\0';
+    }
+
+    if (strncmp(resolved_path, root_directory, strlen(root_directory)) != 0) {
+        return 2;
+    }
+
+    // 万一是很多个相对路径？？？
+    // 如果是相对路径
+    // if (strcmp(path, "..") == 0) {
+    //     char str[256];
+    //     getcwd(str, 256);
+    //     if (str[strlen(str) - 1] == '/') { //root_directory最后不含"/"
+    //         resolved_path[strlen(resolved_path) - 1] = '\0';
+    //     }
+    //     if (strcmp(str, root_directory) == 0) {
+    //         return 2;
+    //     }
+    // }
+
     if (chdir(path) == -1) {
         printf("Error chdir(): %s(%d)\n", strerror(errno), errno);
         return 2;
     }
+
     return 0;
 }
 
@@ -541,7 +624,10 @@ int parse_request(char *msg, struct request *req) {
 // RETR STOR LIST通过data listen socket建立data socket，内部已经关闭了data
 // socket和data listen socket
 int handle_request(char *msg) {
-    // TODO return 0!!!
+    // TODO return 0!!
+
+    // return 1 QUIT
+    // return 0 其他消息
     struct request req;
     parse_request(msg, &req);
     printf("** verb: %s\n", req.verb);
@@ -556,16 +642,20 @@ int handle_request(char *msg) {
     } else if (strcmp(req.verb, "ABOR") == 0) {
         if (status == PASS) {
             send_msg(control_socket, "225 No transfer to abort.\r\n");
+            return 0;
         } else if (status == PASV) {
             close(data_socket);
             send_msg(control_socket, "225 ABOR command successful.\r\n");
+            status = PASS;
+            return 0;
         } else if (status == PORT) {
             send_msg(control_socket, "225 ABOR command successful.\r\n");
+            status = PASS;
+            return 0;
         }
-        status = PASS;
     } else if (strcmp(req.verb, "USER") == 0) {
         if (strcmp(req.parameter, "") == 0) {
-            send_msg(control_socket, "501 Please provide parameters.\r\n");
+            send_msg(control_socket, "501 Please provide a parameter.\r\n");
             return 0;
         }
         if (status == CONNECTED) {
@@ -586,55 +676,84 @@ int handle_request(char *msg) {
             send_msg(control_socket, "230 Login successful.\r\n");
             status = PASS;
             return 0;
-        } else {
-            send_msg(control_socket,
-                     "503 Please use the USER command first.\r\n");
-            return 0;
         }
     } else if (strcmp(req.verb, "SYST") == 0) {
         send_msg(control_socket, "215 UNIX Type: L8\r\n");
+        return 0;
     } else if (strcmp(req.verb, "TYPE") == 0) {
         if (strcmp(req.parameter, "") == 0) {
-            send_msg(control_socket, "501 Please provide parameters.\r\n");
+            send_msg(control_socket, "501 Please provide a parameter.\r\n");
             return 0;
         }
 
         if (strcmp(req.parameter, "I") == 0) {
             send_msg(control_socket, "200 Type set to I.\r\n");
             binary_mode = 1; // on
+            return 0;
         } else {
             send_msg(control_socket,
                      "500 Server just support TYPE I.\r\n"); // TODO
-        }
-    } else if (strcmp(req.verb, "SIZE") == 0) { // TODO
-        if (strcmp(req.parameter, "") == 0) {
-            send_msg(control_socket, "501 Please provide parameters.\r\n");
             return 0;
         }
-        int size;
-        int ret = file_check(req.parameter, &size);
+    } else if (strcmp(req.verb, "SIZE") ==
+               0) { // TODO 重新获取文件大小！！！！！！！！！
 
-        if (ret == 0) {
-            char buff[256];
-            sprintf(buff, "213 %d\r\n", size);
-            send_msg(control_socket, buff);
-            printf("size: %d\n", size);
-        } else if (ret == 1) {
-            send_msg(control_socket, "500 retry.\r\n");
-            printf("1\n");
-        } else if (ret == 2) {
-            send_msg(control_socket, "451 not a file.\r\n");
-            printf("2\n");
-        } else {
-            send_msg(control_socket, "500 retry.\r\n");
+        if (strcmp(req.parameter, "") == 0) {
+            send_msg(control_socket, "501 Please provide a parameter.\r\n");
+            return 0;
         }
+
+        int ret = path_check(req.parameter); // 不能包含../
+
+        if (ret == 1) {
+            send_msg(control_socket, "451 Paths cannot contain \"../\".\r\n");
+            return 0;
+        } else {
+
+            ret = path_convert(req.parameter); // 直接修改吧，因为DTP要看req
+
+            if (ret == 0) {
+
+                struct stat path_stat;
+                // 使用 stat 函数获取文件状态
+                if (stat(req.parameter, &path_stat) != 0) {
+                    printf("Error stat(): %s(%d)\n", strerror(errno), errno);
+                    send_msg(
+                        control_socket,
+                        "550 Path is not available.\r\n"); // TODO interal error
+                    return 0;
+                }
+
+                // 检查路径是否为一个文件
+                if (!S_ISREG(path_stat.st_mode)) {
+                    printf("Error: %s is not a file\n", req.parameter);
+                    send_msg(control_socket,
+                             "451 This is not a directory.\r\n");
+                    return 0;
+                }
+
+                char buff[256];
+                sprintf(buff, "213 %ld\r\n", path_stat.st_size);
+                send_msg(control_socket, buff);
+                printf("size: %ld\n", path_stat.st_size);
+                return 0;
+
+            } else if (ret == 1) {
+                send_msg(control_socket, "451 This is not a directory.\r\n");
+                return 0;
+            } else {
+                send_msg(control_socket, "550 Path is not available.\r\n");
+                return 0;
+            }
+        }
+
     } else if (strcmp(req.verb, "PWD") == 0) {
         if (status == PASS || status == PORT || status == PASV) {
             char path[256];
 
             get_cwd(path);
             printf("path: %s\n", path);
-
+            // TODO rewrite
             char buff[400];
             sprintf(buff, "257 \"%s\" is the current directory.\r\n", path);
             send_msg(control_socket, buff);
@@ -642,63 +761,106 @@ int handle_request(char *msg) {
         }
     } else if (strcmp(req.verb, "CWD") == 0) {
         if (strcmp(req.parameter, "") == 0) {
-            send_msg(control_socket, "501 Please provide parameters.\r\n");
+            send_msg(control_socket, "501 Please provide a parameter.\r\n");
             return 0;
         }
         if (status == PASS || status == PORT || status == PASV) {
             char path[256];
             sscanf(req.parameter, "%s", path);
-            // TODO need to test
-            int ret = change_dir(path);
-            if (ret == 0) {
-                send_msg(control_socket,
-                         "250 Directory successfully changed.\r\n");
-                return 0;
-            } else if (ret == 2) {
+
+            int ret = path_convert(path);
+
+            if (ret == 0) { // 没有越界
+                if (chdir(path) == 0) {
+                    send_msg(control_socket,
+                             "250 Directory successfully changed.\r\n");
+                    return 0;
+                } else {
+                    send_msg(control_socket,
+                             "550 Fail to change the directory.\r\n"); // TODO
+                    return 0;
+                }
+            } else {
                 send_msg(control_socket, "550 Path is not available.\r\n");
                 return 0;
             }
         }
     } else if (strcmp(req.verb, "MKD") == 0) {
         if (strcmp(req.parameter, "") == 0) {
-            send_msg(control_socket, "501 Please provide parameters.\r\n");
+            send_msg(control_socket, "501 Please provide a parameter.\r\n");
             return 0;
         }
         if (status == PASS || status == PORT || status == PASV) {
             char path[256];
             sscanf(req.parameter, "%s", path);
+            printf("path: %s\n", path);
 
-            if (mkdir(path, 0777) == 0) {
-                rewrite_path(path);
-                char buff[400];
-                sprintf(buff, "257 \"%s\" is created.\r\n", path);
-                send_msg(control_socket, buff);
-            } else {
-                send_msg(control_socket,
-                         "550 Failed to create the directory.\r\n"); // TODO
+            if (path[strlen(path) - 1] == '/') { // 去掉最后的/
+                path[strlen(path) - 1] = '\0';
             }
-            return 0;
+
+            // 要先去掉文件的名称，看看之前的目录存不存在，用convert
+
+            char filename[256];
+            char filepath[256];
+
+            basename(path, filename);
+            strcpy(filepath, path);
+            filepath[strlen(filepath) - strlen(filename)] = '\0';
+
+            int ret = path_convert(filepath);
+            printf("path: %s\n", filepath);
+
+            if (ret == 0) { // 没有越界
+                char real_path[256];
+                strcpy(real_path, filepath); // 返回值最后不含/
+                strcat(real_path, "/");
+                strcat(real_path, filename);
+                if (mkdir(real_path, 0777) == 0) {
+                    rewrite_path(path); // 用户输入的path
+                    char buff[400];
+                    sprintf(buff, "257 \"%s\" is created.\r\n", path);
+                    send_msg(control_socket, buff);
+                    return 0;
+                } else {
+                    send_msg(control_socket,
+                             "550 Failed to create the directory.\r\n"); // TODO
+                    return 0;
+                }
+            } else {
+                send_msg(control_socket, "550 Path is not available.\r\n");
+                return 0;
+            }
         }
     } else if (strcmp(req.verb, "RMD") == 0) {
         if (strcmp(req.parameter, "") == 0) {
-            send_msg(control_socket, "501 Please provide parameters.\r\n");
+            send_msg(control_socket, "501 Please provide a parameter.\r\n");
             return 0;
         }
+
         if (status == PASS || status == PORT || status == PASV) {
             char path[256];
             sscanf(req.parameter, "%s", path);
 
-            if (rmdir(path) == 0) {
-                send_msg(control_socket, "250 Directory deleted.\r\n");
+            int ret = path_convert(path);
+
+            if (ret == 0) { // 没有越界
+                if (rmdir(path) == 0) {
+                    send_msg(control_socket, "250 Directory deleted.\r\n");
+                    return 0;
+                } else {
+                    send_msg(control_socket,
+                             "550 Failed to remove the directory.\r\n"); // TODO
+                    return 0;
+                }
             } else {
-                send_msg(control_socket,
-                         "550 Failed to remove the directory..\r\n"); // TODO
+                send_msg(control_socket, "550 Path is not available.\r\n");
+                return 0;
             }
-            return 0;
         }
     } else if (strcmp(req.verb, "PORT") == 0) {
         if (strcmp(req.parameter, "") == 0) {
-            send_msg(control_socket, "501 Please provide parameters.\r\n");
+            send_msg(control_socket, "501 Please provide a parameter.\r\n");
             return 0;
         }
         if (status == PASS || status == PORT || status == PASV) {
@@ -754,70 +916,125 @@ int handle_request(char *msg) {
         }
     } else if (strcmp(req.verb, "RETR") == 0) {
         if (strcmp(req.parameter, "") == 0) {
-            send_msg(control_socket, "501 Please provide parameters.\r\n");
+            send_msg(control_socket, "501 Please provide a parameter.\r\n");
             return 0;
         }
 
         if (status == PORT || status == PASV) {
 
-            int ret = file_check(req.parameter, NULL);
+            int ret = path_check(req.parameter);
 
             if (ret == 1) {
                 send_msg(control_socket,
                          "451 Paths cannot contain \"../\".\r\n");
-            } else if (ret == 2) {
-                send_msg(control_socket, "451 This is not a file.\r\n");
-            } else if (ret == 0) {
-                printf("in RETR\n");
-                DTP(req);
+                return 0;
+            } else {
+
+                ret = path_convert(req.parameter); // 直接修改吧，因为DTP要看req
+
+                if (ret == 0) {
+                    printf("in RETR\n");
+                    DTP(req);      // DTP中消息已经处理完
+                    status = PASS; // 真正用了再expire之前的DTP
+                    return 0;
+                } else if (ret == 1) {
+                    send_msg(control_socket, "451 This is not a file.\r\n");
+                    return 0;
+                } else {
+                    send_msg(control_socket, "550 Path is not available.\r\n");
+                    return 0;
+                }
             }
         } else {
-            send_msg(control_socket,
-                     "425 no TCP connection was established\r\n");
+            send_msg(control_socket, "425 Please use PORT or PASV first.\r\n");
+            return 0;
         }
-
-        status = PASS;
-        return 0;
     } else if (strcmp(req.verb, "STOR") == 0) {
         if (strcmp(req.parameter, "") == 0) {
-            send_msg(control_socket, "501 Please provide parameters.\r\n");
+            send_msg(control_socket, "501 Please provide a parameter.\r\n");
             return 0;
         }
         if (status == PORT || status == PASV) {
+            // 不需要路经检查，因为STOR只会存储到当前路径
+            char temp[256];
+            basename(req.parameter, temp);
+            strcpy(req.parameter, temp);
+            printf("filename: %s\n", req.parameter);
 
-            if (path_check(req.parameter) != 0) {
-                send_msg(control_socket,
-                         "451 Paths cannot contain \"../\".\r\n");
-            } else {
-                DTP(req);
-            }
-        } else {
-            send_msg(control_socket, "425 No TCP connection\r\n");
-        }
-
-        status = PASS;
-        return 0;
-    } else if (strcmp(req.verb, "LIST") == 0) {
-        if (status == PORT || status == PASV) {
             DTP(req);
+            status = PASS;
+            return 0;
         } else {
-            send_msg(control_socket, "425 No TCP connection\r\n");
+            send_msg(control_socket,
+                     "425 Please use PORT or PASV first.\r\n"); // TODO
+            return 0;
         }
 
         status = PASS;
         return 0;
+    } else if (strcmp(req.verb, "LIST") == 0) { // TODO 路径！！！！
+        if (status == PORT || status == PASV) {
+
+            if (strcmp(req.parameter, "") == 0) {
+                strcpy(req.parameter, ".");
+            }
+
+            int ret = path_convert(req.parameter); // 直接修改吧，因为DTP要看req
+
+            if (ret == 0) {
+                // 看看路径是不是一个文件夹
+                struct stat path_stat;
+                if (stat(req.parameter, &path_stat) != 0) {
+                    perror("stat error");
+                    send_msg(control_socket,
+                             "550 Path is not available.\r\n"); // TODO
+                    return 0;
+                }
+
+                if (S_ISDIR(path_stat.st_mode)) {
+                    printf("in LIST\n");
+                    DTP(req);      // DTP中消息已经处理完
+                    status = PASS; // 真正用了再expire之前的DTP
+                    return 0;
+                } else {
+                    send_msg(control_socket,
+                             "451 This is not a directory.\r\n");
+                    return 0;
+                }
+            } else if (ret == 1) {
+                send_msg(control_socket, "451 This is not a directory.\r\n");
+                return 0;
+            } else {
+                send_msg(control_socket, "550 Path is not available.\r\n");
+                return 0;
+            }
+
+        } else {
+            send_msg(control_socket, "425 Please use PORT or PASV first.\r\n");
+            return 0;
+        }
     } else {
-        send_msg(control_socket, "502 retry\r\n");
+        send_msg(control_socket,
+                 "502 Unsupport command.\r\n"); // unknown command TODO
+        return 0;
     }
 
+    // 溢出的未处理的消息
+    if (status == CONNECTED) {
+        send_msg(control_socket, "530 Please login with USER.\r\n");
+    } else if (status == USER) {
+        send_msg(control_socket, "530 Please login with PASS.\r\n");
+    } else {
+        send_msg(control_socket, "500 retry.\r\n");
+    }
     return 0;
 }
 
 int main(int argc, char *argv[]) {
     binary_mode = 1; // on
 
-    int port = 21;                     // 默认端口
-    char root_directory[256] = "/tmp"; // 用于存储根目录，确保分配足够的空间
+    int port = 21;                  // 默认端口
+    strcpy(root_directory, "/tmp"); // 用于存储根目录，确保分配足够的空间
     strcpy(pasv_mode_info.ip, "127.0.0.1");
 
     for (int i = 1; i < argc; i++) {
@@ -844,10 +1061,20 @@ int main(int argc, char *argv[]) {
         }
     }
 
+    // 可能输入相对路径！！
+    char temp[256];
+    realpath(root_directory, temp);
+    strcpy(root_directory, temp);
+
+    // 去掉最后的'/'
+    if (root_directory[strlen(root_directory) - 1] == '/') {
+        root_directory[strlen(root_directory) - 1] = '\0';
+    }
+
     printf("port: %d\n", port);
     printf("root_directory: %s\n", root_directory);
 
-    if (change_dir(root_directory) != 0) {
+    if (chdir(root_directory) != 0) { // 不能用change_dir，因为那个会转换路径
         printf("Error: cannot change to root directory\n");
         exit(EXIT_FAILURE);
     }
