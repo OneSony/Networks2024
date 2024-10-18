@@ -249,7 +249,7 @@ void close_DTP(int sig) {
     }
     // TODO -1
     close(data_socket);
-    printf("Child process: Received SIGTERM, exiting...\n");
+    printf("Child process: ok\n");
 
     exit(2); // TODO
 }
@@ -290,7 +290,8 @@ int connect_to(int *sockfd, char *ip, int port) {
     return 0;
 }
 
-int get_msg(int sockfd, char *sentence) {
+int get_msg(int sockfd,
+            char *sentence) { // 只会在主进程，以及没有子进程存在的时候调用
 
     int start = 0, end = 0;
 
@@ -318,7 +319,21 @@ int get_msg(int sockfd, char *sentence) {
                 printf("Error read(): %s(%d)\n", strerror(errno), errno);
                 return -1;
             } else if (n == 0) {
-                return -1; // 连接关闭
+                if (file != NULL) {
+                    fclose(file);
+                    file = NULL;
+                }
+
+                if (pfile != NULL) {
+                    pclose(pfile);
+                    pfile = NULL;
+                }
+                // TODO !!!close更多东西
+                close(control_socket);
+
+                printf("Connection closed by the host.\n");
+
+                exit(0);
             } else {
                 // 将读取到的字符存储到句子中
                 sentence[end++] = ch;
@@ -601,10 +616,7 @@ int main(int argc, char *argv[]) {
 
     // 欢迎信息
     char msg[SENTENCE_LEN];
-    if (-1 == get_msg(control_socket, msg)) {
-        printf("cannot get welcome message\n");
-        return 1;
-    }
+    get_msg(control_socket, msg);
 
     status = CONNECTED;
 
@@ -626,7 +638,6 @@ int main(int argc, char *argv[]) {
         }
 
         // printf("status: %d\n",status);
-
     }
 
     close(control_socket);
