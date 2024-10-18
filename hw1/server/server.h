@@ -20,6 +20,7 @@
 #define MIN_PORT 20000
 #define MAX_PORT 65535
 #define MAX_RES 100
+#define TIMEOUT_MS 60000
 
 enum user_status { CONNECTED, USER, PASS, PORT, PASV, RERT, STOR };
 

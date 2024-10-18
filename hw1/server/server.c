@@ -22,9 +22,41 @@ FILE *pfile = NULL;
 
 char root_directory[256];
 
-// TODO 路径需要换算
-
 int p_fds[2];
+
+int accept_with_timeout(int data_listen_socket) {
+
+    struct pollfd fds[1];
+    int ret, data_socket;
+
+    fds[0].fd = data_listen_socket;
+    fds[0].events = POLLIN; // We are waiting for data to be ready to read
+                            // (incoming connection)
+
+    // Wait for data to be ready or timeout
+    ret = poll(fds, 1, TIMEOUT_MS);
+
+    if (ret == -1) {
+        // Error during poll
+        printf("Error poll(): %s(%d)\n", strerror(errno), errno);
+        return -1;
+    } else if (ret == 0) {
+        // Timeout occurred
+        printf("Timeout after 1 minute waiting for a connection.\n");
+        return -1;
+    } else {
+        // There is a connection to accept
+        if (fds[0].revents & POLLIN) {
+            data_socket = accept(data_listen_socket, NULL, NULL);
+            if (data_socket == -1) {
+                printf("Error accept(): %s(%d)\n", strerror(errno), errno);
+                return -1;
+            }
+        }
+    }
+
+    return data_socket;
+}
 
 int basename(char *path, char *filename) {
     char *p = strrchr(path, '/');
@@ -36,7 +68,7 @@ int basename(char *path, char *filename) {
     return 0;
 }
 
-//把越界写道convert里面吧
+// 把越界写道convert里面吧
 int path_convert(char *path) { // 输入client的路径，输出server中的绝对路径
     char server_path[600];
     if (path[0] == '/') { // Absolute path
@@ -87,8 +119,8 @@ int DTP(struct request req) { // 这里的路径要直接可以操作
             return 0;
         }
     } else if (status == PASV) {
-        if ((data_socket = accept(data_listen_socket, NULL, NULL)) == -1) {
-            printf("Error accept(): %s(%d)\n", strerror(errno), errno);
+
+        if ((data_socket = accept_with_timeout(data_listen_socket)) == -1) {
             close(data_listen_socket);
             send_msg(control_socket,
                      "425 no TCP connection was established\r\n");

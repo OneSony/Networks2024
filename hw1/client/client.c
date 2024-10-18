@@ -21,6 +21,7 @@
 #define MIN_PORT 20000
 #define MAX_PORT 65535
 #define MAX_RES 100
+#define TIMEOUT_MS 60000
 
 enum user_status { CONNECTED, USER, PASS, PORT, PASV, RERT, STOR };
 
@@ -88,6 +89,73 @@ FILE *pfile = NULL;
 
 int p_fds[2];
 
+int read_with_timeout(int sockfd, char *ch) { // 为DTP设计
+
+    struct pollfd fds[1];
+    int ret;
+
+    // Set up the poll structure
+    fds[0].fd = sockfd;
+    fds[0].events = POLLIN; // We are waiting for input (readable data)
+
+    // Poll with a timeout of 1 minute
+    ret = poll(fds, 1, TIMEOUT_MS);
+
+    if (ret == -1) {
+        printf("Error poll(): %s(%d)\n", strerror(errno), errno);
+        return -1;
+    } else if (ret == 0) {
+        // Timeout occurred
+        printf("Timeout after 1 minute waiting for get msg.\n");
+        return -1; // Timeout, exit the function
+    } else {
+        int n = read(sockfd, ch, 1);
+
+        if (n < 0) {
+            printf("Error read(): %s(%d)\n", strerror(errno), errno);
+            return -1;
+        } else if (n == 0) { // close
+            return 1;        // TODO 真的有意义吗
+        }
+    }
+
+    return 0; // Continue reading
+}
+
+int accept_with_timeout(int data_listen_socket) {
+
+    struct pollfd fds[1];
+    int ret, data_socket;
+
+    fds[0].fd = data_listen_socket;
+    fds[0].events = POLLIN; // We are waiting for data to be ready to read
+                            // (incoming connection)
+
+    // Wait for data to be ready or timeout
+    ret = poll(fds, 1, TIMEOUT_MS);
+
+    if (ret == -1) {
+        // Error during poll
+        printf("Error poll(): %s(%d)\n", strerror(errno), errno);
+        return -1;
+    } else if (ret == 0) {
+        // Timeout occurred
+        printf("Timeout after 1 minute waiting for a connection.\n");
+        return -1;
+    } else {
+        // There is a connection to accept
+        if (fds[0].revents & POLLIN) {
+            data_socket = accept(data_listen_socket, NULL, NULL);
+            if (data_socket == -1) {
+                printf("Error accept(): %s(%d)\n", strerror(errno), errno);
+                return -1;
+            }
+        }
+    }
+
+    return data_socket;
+}
+
 int basename(char *path, char *filename) {
     char *p = strrchr(path, '/');
     if (p == NULL) {
@@ -114,9 +182,8 @@ int DTP(struct request req) { // TODO 错误处理
 
         if (status == PORT) {
 
-            if ((data_socket = accept(data_listen_socket, NULL, NULL)) ==
-                -1) { // TODO 超时
-                printf("Error accept(): %s(%d)\n", strerror(errno), errno);
+            if ((data_socket = accept_with_timeout(data_listen_socket)) ==
+                -1) { // TODO直接结束进程？？
                 close(data_listen_socket);
                 exit(1);
             } else {
@@ -313,12 +380,12 @@ int get_msg(int sockfd,
 
         while (1) { // 读完句子
             char ch;
-            int n = read(sockfd, &ch, 1); // 逐个字符读取
 
-            if (n < 0) {
-                printf("Error read(): %s(%d)\n", strerror(errno), errno);
+            int ret = read_with_timeout(sockfd, &ch);
+
+            if (ret == -1) {
                 return -1;
-            } else if (n == 0) {
+            } else if (ret == 1) { // close
                 if (file != NULL) {
                     fclose(file);
                     file = NULL;
@@ -335,7 +402,8 @@ int get_msg(int sockfd,
 
                 exit(0);
             } else {
-                // 将读取到的字符存储到句子中
+                // printf("%c", ch);
+                //  将读取到的字符存储到句子中
                 sentence[end++] = ch;
 
                 // 检查是否是\r\n
