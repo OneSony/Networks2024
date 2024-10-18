@@ -422,12 +422,13 @@ int get_msg(int sockfd, char *sentence) {
             // p += n;
             // printf("sentence: %s\n", sentence);
 
-            for (int i = 0; i < n; i++) {
-                printf(
-                    "%02x ",
-                    (unsigned char)sentence[p + i]); // 打印每个字节的十六进制值
-            }
-            printf("\n");
+            // for (int i = 0; i < n; i++) {
+            //     printf(
+            //         "%02x ",
+            //         (unsigned char)sentence[p + i]); //
+            //         打印每个字节的十六进制值
+            // }
+            // printf("\n");
 
             p += n;
             if (sentence[p - 2] == '\r' && sentence[p - 1] == '\n') {
@@ -563,6 +564,10 @@ int handle_request(char *msg) {
         }
         status = PASS;
     } else if (strcmp(req.verb, "USER") == 0) {
+        if (strcmp(req.parameter, "") == 0) {
+            send_msg(control_socket, "501 Please provide parameters.\r\n");
+            return 0;
+        }
         if (status == CONNECTED) {
             if (strcmp(req.parameter, "anonymous") == 0) {
                 send_msg(control_socket,
@@ -589,13 +594,23 @@ int handle_request(char *msg) {
     } else if (strcmp(req.verb, "SYST") == 0) {
         send_msg(control_socket, "215 UNIX Type: L8\r\n");
     } else if (strcmp(req.verb, "TYPE") == 0) {
+        if (strcmp(req.parameter, "") == 0) {
+            send_msg(control_socket, "501 Please provide parameters.\r\n");
+            return 0;
+        }
+
         if (strcmp(req.parameter, "I") == 0) {
             send_msg(control_socket, "200 Type set to I.\r\n");
             binary_mode = 1; // on
         } else {
-            send_msg(control_socket, "500 retry just I.\r\n"); // TODO
+            send_msg(control_socket,
+                     "500 Server just support TYPE I.\r\n"); // TODO
         }
     } else if (strcmp(req.verb, "SIZE") == 0) { // TODO
+        if (strcmp(req.parameter, "") == 0) {
+            send_msg(control_socket, "501 Please provide parameters.\r\n");
+            return 0;
+        }
         int size;
         int ret = file_check(req.parameter, &size);
 
@@ -626,26 +641,29 @@ int handle_request(char *msg) {
             return 0;
         }
     } else if (strcmp(req.verb, "CWD") == 0) {
+        if (strcmp(req.parameter, "") == 0) {
+            send_msg(control_socket, "501 Please provide parameters.\r\n");
+            return 0;
+        }
         if (status == PASS || status == PORT || status == PASV) {
             char path[256];
             sscanf(req.parameter, "%s", path);
-
-            if (strcmp(path, "") == 0) {
-                send_msg(control_socket, "550 Missing path.\r\n");
+            // TODO need to test
+            int ret = change_dir(path);
+            if (ret == 0) {
+                send_msg(control_socket,
+                         "250 Directory successfully changed.\r\n");
                 return 0;
-            } else {
-                int ret = change_dir(path);
-                if (ret == 0) {
-                    send_msg(control_socket,
-                             "250 Directory successfully changed.\r\n");
-                    return 0;
-                } else if (ret == 2) {
-                    send_msg(control_socket, "550 Path is not available.\r\n");
-                    return 0;
-                }
+            } else if (ret == 2) {
+                send_msg(control_socket, "550 Path is not available.\r\n");
+                return 0;
             }
         }
     } else if (strcmp(req.verb, "MKD") == 0) {
+        if (strcmp(req.parameter, "") == 0) {
+            send_msg(control_socket, "501 Please provide parameters.\r\n");
+            return 0;
+        }
         if (status == PASS || status == PORT || status == PASV) {
             char path[256];
             sscanf(req.parameter, "%s", path);
@@ -662,6 +680,10 @@ int handle_request(char *msg) {
             return 0;
         }
     } else if (strcmp(req.verb, "RMD") == 0) {
+        if (strcmp(req.parameter, "") == 0) {
+            send_msg(control_socket, "501 Please provide parameters.\r\n");
+            return 0;
+        }
         if (status == PASS || status == PORT || status == PASV) {
             char path[256];
             sscanf(req.parameter, "%s", path);
@@ -675,6 +697,10 @@ int handle_request(char *msg) {
             return 0;
         }
     } else if (strcmp(req.verb, "PORT") == 0) {
+        if (strcmp(req.parameter, "") == 0) {
+            send_msg(control_socket, "501 Please provide parameters.\r\n");
+            return 0;
+        }
         if (status == PASS || status == PORT || status == PASV) {
 
             if (status == PASV) { // 关闭旧的
@@ -727,6 +753,10 @@ int handle_request(char *msg) {
             return 0;
         }
     } else if (strcmp(req.verb, "RETR") == 0) {
+        if (strcmp(req.parameter, "") == 0) {
+            send_msg(control_socket, "501 Please provide parameters.\r\n");
+            return 0;
+        }
 
         if (status == PORT || status == PASV) {
 
@@ -749,6 +779,10 @@ int handle_request(char *msg) {
         status = PASS;
         return 0;
     } else if (strcmp(req.verb, "STOR") == 0) {
+        if (strcmp(req.parameter, "") == 0) {
+            send_msg(control_socket, "501 Please provide parameters.\r\n");
+            return 0;
+        }
         if (status == PORT || status == PASV) {
 
             if (path_check(req.parameter) != 0) {
