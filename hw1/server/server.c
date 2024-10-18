@@ -7,10 +7,10 @@
 
 enum user_status status;
 
-int control_listen_socket;
-int control_socket;
-int data_listen_socket;
-int data_socket;
+int control_listen_socket = -1;
+int control_socket = -1;
+int data_listen_socket = -1;
+int data_socket = -1;
 
 int binary_mode;
 
@@ -22,7 +22,53 @@ FILE *pfile = NULL;
 
 char root_directory[256];
 
-int p_fds[2];
+int p_fds[2] = {-1, -1};
+
+int dtp_pid = -1;
+
+void exit_connection() {
+
+    if (dtp_pid != -1 && kill(dtp_pid, 0) == 0) {
+        kill(dtp_pid, SIGTERM);
+        waitpid(dtp_pid, NULL, 0); // 等待子进程终止
+    }
+
+    if (control_socket != -1) {
+        close(control_socket);
+    }
+
+    if (control_listen_socket != -1) {
+        close(control_listen_socket);
+    }
+
+    if (data_listen_socket != -1) {
+        close(data_listen_socket);
+    }
+
+    if (data_socket != -1) {
+        close(data_socket);
+    }
+
+    if (p_fds[0] != -1) {
+        close(p_fds[0]);
+    }
+
+    if (p_fds[1] != -1) {
+        close(p_fds[1]);
+    }
+
+    if (file != NULL) {
+        fclose(file);
+        file = NULL;
+    }
+
+    if (pfile != NULL) {
+        pclose(pfile);
+        pfile = NULL;
+    }
+
+    exit(0);
+}
 
 int accept_with_timeout(int data_listen_socket) {
 
@@ -122,12 +168,14 @@ int DTP(struct request req) { // 这里的路径要直接可以操作
 
         if ((data_socket = accept_with_timeout(data_listen_socket)) == -1) {
             close(data_listen_socket);
+            data_listen_socket = -1;
             send_msg(control_socket,
                      "425 no TCP connection was established\r\n");
             status = PASS;
             return 0;
         } else {
             close(data_listen_socket);
+            data_listen_socket = -1;
         }
     }
 
@@ -141,8 +189,8 @@ int DTP(struct request req) { // 这里的路径要直接可以操作
 
     printf("pipe success\n");
 
-    int pid = fork();
-    if (pid == 0) { // 创建DTP
+    dtp_pid = fork();
+    if (dtp_pid == 0) { // 创建DTP
 
         // 正常传输退出 0
         // 异常退出 1
@@ -150,7 +198,9 @@ int DTP(struct request req) { // 这里的路径要直接可以操作
         // 用pipe传递消息
         signal(SIGTERM, close_DTP);
         close(control_socket);
+        control_socket = -1;
         close(p_fds[0]); // 关闭管道的读取端
+        p_fds[0] = -1;
 
         int pid_signal;
 
@@ -164,7 +214,9 @@ int DTP(struct request req) { // 这里的路径要直接可以操作
                 pid_signal = 1;
                 write(p_fds[1], &pid_signal, sizeof(pid_signal));
                 close(data_socket);
+                data_socket = -1;
                 close(p_fds[1]);
+                p_fds[1] = -1;
                 exit(1);
             }
 
@@ -179,7 +231,9 @@ int DTP(struct request req) { // 这里的路径要直接可以操作
                     pid_signal = 2;
                     write(p_fds[1], &pid_signal, sizeof(pid_signal));
                     close(data_socket);
+                    data_socket = -1;
                     close(p_fds[1]);
+                    p_fds[1] = -1;
                     exit(2);
                 }
             }
@@ -199,7 +253,9 @@ int DTP(struct request req) { // 这里的路径要直接可以操作
                 pid_signal = 1;
                 write(p_fds[1], &pid_signal, sizeof(pid_signal));
                 close(data_socket);
+                data_socket = -1;
                 close(p_fds[1]);
+                p_fds[1] = -1;
                 exit(1);
             }
 
@@ -229,7 +285,9 @@ int DTP(struct request req) { // 这里的路径要直接可以操作
                 pid_signal = 1;
                 write(p_fds[1], &pid_signal, sizeof(pid_signal));
                 close(data_socket);
+                data_socket = -1;
                 close(p_fds[1]);
+                p_fds[1] = -1;
                 exit(1);
             }
 
@@ -252,7 +310,9 @@ int DTP(struct request req) { // 这里的路径要直接可以操作
                     pid_signal = 2;
                     write(p_fds[1], &pid_signal, sizeof(pid_signal));
                     close(data_socket);
+                    data_socket = -1;
                     close(p_fds[1]);
+                    p_fds[1] = -1;
                     exit(2);
                 }
                 printf("%s", buffer);
@@ -264,14 +324,18 @@ int DTP(struct request req) { // 这里的路径要直接可以操作
         }
 
         close(data_socket);
+        data_socket = -1;
         printf("**end send file success\n");
 
         write(p_fds[1], &pid_signal, sizeof(pid_signal)); // 向管道写入数据
         close(p_fds[1]); // 关闭管道的写入端
+        p_fds[1] = -1;
         exit(0);
-    } else {
+    } else if (dtp_pid > 0) {
         close(data_socket);
+        data_socket = -1;
         close(p_fds[1]);
+        p_fds[1] = -1;
 
         struct pollfd fds[2];
 
@@ -299,16 +363,7 @@ int DTP(struct request req) { // 这里的路径要直接可以操作
                 printf("Control process: have msg.\n");
                 // get msg
                 char msg[SENTENCE_LEN];
-                if (0 != get_msg(control_socket, msg)) { // 主进程断开 TODO
-                    printf("connection error\n");
-                    // TODO 清空port
-                    kill(pid, SIGTERM);
-                    waitpid(pid, NULL, 0); // 等待子进程终止
-                    close(p_fds[0]);
-                    close(control_socket);
-                    printf("exit\n");
-                    exit(0);
-                }
+                get_msg(control_socket, msg);
 
                 printf("msg: %s\n", msg);
 
@@ -323,9 +378,9 @@ int DTP(struct request req) { // 这里的路径要直接可以操作
                     strcmp(req.verb, "QUIT") == 0) {
                     // 收到 ABOR 命令，终止文件传输
                     printf("Control process: ABOR command received.\n");
-                    kill(pid, SIGTERM); // 终止子进程
+                    kill(dtp_pid, SIGTERM); // 终止子进程
                     send_msg(control_socket, "426 Transfer aborted.\r\n");
-                    waitpid(pid, NULL, 0); // 等待子进程终止
+                    waitpid(dtp_pid, NULL, 0); // 等待子进程终止
                     send_msg(
                         control_socket,
                         "226 Abort command was successfully processed.\r\n");
@@ -355,7 +410,11 @@ int DTP(struct request req) { // 这里的路径要直接可以操作
 
         // 清理
         close(p_fds[0]);
-        waitpid(pid, NULL, 0); // 确保子进程已经终止
+        p_fds[0] = -1;
+        waitpid(dtp_pid, NULL, 0); // 确保子进程已经终止
+    } else {                       // 错误
+        perror("fork");
+        send_msg(control_socket, "500 Internal error.\r\n");
     }
 
     return 0;
@@ -372,14 +431,37 @@ void close_DTP(int sig) {
         pclose(pfile);
         pfile = NULL;
     }
-    // TODO -1
-    close(data_socket);
-    close(p_fds[1]); // 关闭管道的写入端
+
+    if (data_listen_socket != -1) {
+        close(data_listen_socket);
+    }
+
+    if (data_socket != -1) {
+        close(data_socket);
+    }
+
+    if (control_socket != -1) {
+        close(control_socket);
+    }
+
+    if (control_listen_socket != -1) {
+        close(control_listen_socket);
+    }
+
+    if (p_fds[0] != -1) {
+        close(p_fds[0]);
+    }
+
+    if (p_fds[1] != -1) {
+        close(p_fds[1]);
+    }
+
     printf("Child process: Received SIGTERM, exiting...\n");
     exit(0); // 正常退出
 }
 
 int send_msg(int sockfd, char *sentence) {
+    printf("send: %s\n", sentence);
     int len = strlen(sentence);
     int p = 0;
     while (p < len) {
@@ -468,6 +550,7 @@ int connect_to(int *sockfd, char *ip, int port) {
     if (connect(*sockfd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
         printf("Error connect(): %s(%d)\n", strerror(errno), errno);
         close(*sockfd);
+        *sockfd = -1;
         return 1;
     }
 
@@ -482,7 +565,10 @@ int get_msg(int sockfd, char *sentence) {
         if (n < 0) {
             printf("Error read(): %s(%d)\n", strerror(errno), errno);
             return -1;
-        } else if (n == 0) {
+        } else if (n == 0) { // close
+            printf("Error read(): %s(%d)\n", strerror(errno), errno);
+            printf("connection error\n");
+            exit_connection();
             return -1;
         } else {
             // p += n;
@@ -531,10 +617,12 @@ int listen_at(int *sockfd, int port) {
         if (errno == EADDRINUSE) {
             printf("Error bind(): Port %d is already in use.\n", port);
             close(*sockfd);
+            *sockfd = -1;
             return 2; // 返回2表示端口已被占用
         } else {
             printf("Error bind(): %s(%d)\n", strerror(errno), errno);
             close(*sockfd);
+            *sockfd = -1;
             return 1; // 返回1表示绑定失败
         }
     }
@@ -542,6 +630,7 @@ int listen_at(int *sockfd, int port) {
     if (listen(*sockfd, 5) == -1) {
         printf("Error listen(): %s(%d)\n", strerror(errno), errno);
         close(*sockfd);
+        *sockfd = -1;
         return 1;
     }
 
@@ -575,7 +664,10 @@ int handle_request(char *msg) {
 
     if (strcmp(req.verb, "QUIT") == 0) {
         if (status == PASV) {
-            close(data_listen_socket); // control socket在主函数处理
+            if (data_listen_socket != -1) {
+                close(data_listen_socket);
+                data_listen_socket = -1;
+            }
         }
         send_msg(control_socket, "221 Goodbye.\r\n");
         return 1;
@@ -584,7 +676,10 @@ int handle_request(char *msg) {
             send_msg(control_socket, "225 No transfer to abort.\r\n");
             return 0;
         } else if (status == PASV) {
-            close(data_socket);
+            if (data_listen_socket != -1) {
+                close(data_listen_socket);
+                data_listen_socket = -1;
+            }
             send_msg(control_socket, "225 ABOR command successful.\r\n");
             status = PASS;
             return 0;
@@ -808,8 +903,9 @@ int handle_request(char *msg) {
         }
         if (status == PASS || status == PORT || status == PASV) {
 
-            if (status == PASV) { // 关闭旧的
+            if (data_listen_socket != -1) {
                 close(data_listen_socket);
+                data_listen_socket = -1;
             }
 
             int p1, p2, p3, p4, p5, p6;
@@ -829,8 +925,9 @@ int handle_request(char *msg) {
         if (status == PASS || status == PASV ||
             status == PORT) { // 已开PASV重新更新
 
-            if (status == PASV) { // 关闭旧的
+            if (data_listen_socket != -1) {
                 close(data_listen_socket);
+                data_listen_socket = -1;
             }
 
             // TODO pasv ip
@@ -1102,6 +1199,7 @@ int main(int argc, char *argv[]) {
         int pid = fork();
         if (pid == 0) {
             close(control_listen_socket);
+            control_listen_socket = -1;
 
             // 子进程
             printf("controlfd: %d\n", control_socket);
@@ -1112,15 +1210,7 @@ int main(int argc, char *argv[]) {
             while (1) {
                 printf("in the loop! status:%d\n", status);
                 char msg[SENTENCE_LEN];
-                if (0 != get_msg(control_socket, msg)) {
-
-                    printf("connection error\n");
-                    if (status == PASV) {
-                        close(data_listen_socket); // control socket在主函数处理
-                    }
-                    // TODO 清空port
-                    break;
-                }
+                get_msg(control_socket, msg);
 
                 printf("msg: %s\n", msg);
 
@@ -1130,11 +1220,19 @@ int main(int argc, char *argv[]) {
             }
 
             close(control_socket);
+            control_socket = -1;
             exit(0);
-        } else {
+        } else if (pid > 0) {
             close(control_socket); // 记得关！！！
+            control_socket = -1;
+        } else {
+            perror("fork");
+            send_msg(control_socket, "500 Internal error.\r\n");
         }
     }
 
     close(control_listen_socket);
+    control_listen_socket = -1;
+
+    exit_connection();
 }
