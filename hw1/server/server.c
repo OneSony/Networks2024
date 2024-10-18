@@ -36,10 +36,7 @@ int basename(char *path, char *filename) {
     return 0;
 }
 
-// TODO RMD CMD STOR RETR LIST<可以接受参数！！>
-// TODO ABOR和REST
-
-// TODO 把越界写道convert里面吧
+//把越界写道convert里面吧
 int path_convert(char *path) { // 输入client的路径，输出server中的绝对路径
     char server_path[600];
     if (path[0] == '/') { // Absolute path
@@ -424,52 +421,6 @@ int get_cwd(char *str) {
     return 0;
 }
 
-int change_dir(char *ori_path) { // 只在server服务中使用, 返回值最后不含/
-
-    char path[256];
-    strcpy(path, ori_path);
-    path_convert(path); // conver to server
-    printf("converted: %s\n", path);
-
-    char resolved_path[600];
-
-    if (realpath(path, resolved_path) == NULL) {
-        perror("realpath error for root");
-        return 1;
-    }
-
-    printf("resolved_path: %s\n", resolved_path);
-
-    if (resolved_path[strlen(resolved_path) - 1] ==
-        '/') { // root_directory最后不含"/"
-        resolved_path[strlen(resolved_path) - 1] = '\0';
-    }
-
-    if (strncmp(resolved_path, root_directory, strlen(root_directory)) != 0) {
-        return 2;
-    }
-
-    // 万一是很多个相对路径？？？
-    // 如果是相对路径
-    // if (strcmp(path, "..") == 0) {
-    //     char str[256];
-    //     getcwd(str, 256);
-    //     if (str[strlen(str) - 1] == '/') { //root_directory最后不含"/"
-    //         resolved_path[strlen(resolved_path) - 1] = '\0';
-    //     }
-    //     if (strcmp(str, root_directory) == 0) {
-    //         return 2;
-    //     }
-    // }
-
-    if (chdir(path) == -1) {
-        printf("Error chdir(): %s(%d)\n", strerror(errno), errno);
-        return 2;
-    }
-
-    return 0;
-}
-
 int connect_to(int *sockfd, char *ip, int port) {
     if ((*sockfd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)) == -1) {
         printf("Error socket(): %s(%d)\n", strerror(errno), errno);
@@ -531,32 +482,6 @@ int path_check(char *path) {
     return 0; // 不包含 '../'
 }
 
-int file_check(char *filename, int *size) {
-
-    if (path_check(filename) != 0) { // 路径不合法
-        return 1;
-    }
-
-    struct stat path_stat;
-    // 使用 stat 函数获取文件状态
-    if (stat(filename, &path_stat) != 0) {
-        printf("Error stat(): %s(%d)\n", strerror(errno), errno);
-        return 2;
-    }
-
-    // 检查路径是否为一个文件
-    if (!S_ISREG(path_stat.st_mode)) {
-        printf("Error: %s is not a file\n", filename);
-        return 2; // 返回错误码，表示不是文件
-    }
-
-    if (size != NULL) {
-        *size = path_stat.st_size;
-    }
-
-    return 0;
-}
-
 int listen_at(int *sockfd, int port) {
 
     if ((*sockfd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)) == -1) {
@@ -593,21 +518,6 @@ int listen_at(int *sockfd, int port) {
     return 0;
 }
 
-int parse_response(char *msg, struct response *res) {
-    memset(res, 0, sizeof(*res));
-    int i = 0;
-    char *p = msg;
-    while (1) {
-        if (sscanf(p, "%*[^-]-%[^\r\n]\r\n", res->message[i]) != 1) {
-            break;
-        }
-        p = strchr(p, '\n') + 1;
-        i++;
-    }
-    sscanf(p, "%[^ ] %[^\r\n]\r\n", res->code, res->message[i]);
-    return 0;
-}
-
 int parse_request(char *msg, struct request *req) {
     memset(req, 0, sizeof(*req));
 
@@ -624,8 +534,6 @@ int parse_request(char *msg, struct request *req) {
 // RETR STOR LIST通过data listen socket建立data socket，内部已经关闭了data
 // socket和data listen socket
 int handle_request(char *msg) {
-    // TODO return 0!!
-
     // return 1 QUIT
     // return 0 其他消息
     struct request req;
@@ -695,8 +603,7 @@ int handle_request(char *msg) {
                      "500 Server just support TYPE I.\r\n"); // TODO
             return 0;
         }
-    } else if (strcmp(req.verb, "SIZE") ==
-               0) { // TODO 重新获取文件大小！！！！！！！！！
+    } else if (strcmp(req.verb, "SIZE") == 0) {
 
         if (strcmp(req.parameter, "") == 0) {
             send_msg(control_socket, "501 Please provide a parameter.\r\n");

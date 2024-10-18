@@ -17,11 +17,6 @@
 #include <time.h>
 #include <unistd.h>
 
-// TODO 做无状态！！！
-// TODO 错误处理！！！！
-
-// LIST和消息分段有问题！！！
-// 连接出现问题的时候，是不是需要把链接部分放在DTP里面？？
 #define SENTENCE_LEN 8192
 #define MIN_PORT 20000
 #define MAX_PORT 65535
@@ -274,38 +269,6 @@ int send_msg(int sockfd, char *sentence) {
     return 0;
 }
 
-int rewrite_path(char *str) {
-
-    char result[1024]; // Adjust size as needed, larger than the expected string
-    int j = 0;         // Index for the new buffer
-
-    for (int i = 0; i < strlen(str); i++) {
-        // Check if current character is a double quote
-        if (str[i] == '"') {
-            // Replace with two double quotes
-            result[j++] = '"';
-            result[j++] = '"';
-        }
-        // Check if current character is a newline (octal \012 or '\n')
-        else if (str[i] == '\n') {
-            // Replace newline with null character \000 (octal)
-            result[j++] = '\0';
-        }
-        // Otherwise, copy the character as is
-        else {
-            result[j++] = str[i];
-        }
-    }
-
-    // Add null terminator at the end of the result string
-    result[j] = '\0';
-
-    // Copy the processed string back to the original pointer
-    strcpy(str, result);
-
-    return 0;
-}
-
 int connect_to(int *sockfd, char *ip, int port) {
     if ((*sockfd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)) == -1) {
         printf("Error socket(): %s(%d)\n", strerror(errno), errno);
@@ -396,39 +359,6 @@ int get_msg(int sockfd, char *sentence) {
     printf("%s", sentence);
     fflush(stdout);
     regfree(&regex); // 释放正则表达式
-
-    return 0;
-}
-
-int path_check(char *path) {
-    if (strstr(path, "../") != NULL) {
-        return 1; // 包含 '../'
-    }
-    return 0; // 不包含 '../'
-}
-
-int file_check(char *filename, int *size) {
-
-    if (path_check(filename) != 0) { // 路径不合法
-        return 1;
-    }
-
-    struct stat path_stat;
-    // 使用 stat 函数获取文件状态
-    if (stat(filename, &path_stat) != 0) {
-        printf("Error stat(): %s(%d)\n", strerror(errno), errno);
-        return 2;
-    }
-
-    // 检查路径是否为一个文件
-    if (!S_ISREG(path_stat.st_mode)) {
-        printf("Error: %s is not a file\n", filename);
-        return 2; // 返回错误码，表示不是文件
-    }
-
-    if (size != NULL) {
-        *size = path_stat.st_size;
-    }
 
     return 0;
 }
@@ -613,8 +543,6 @@ int handle_request(char *sentence) {
 
     } else if (strcmp(req.verb, "RETR") == 0 || strcmp(req.verb, "STOR") == 0 ||
                strcmp(req.verb, "LIST") == 0) {
-        // TODO
-        // 到当前目录
 
         send_msg(control_socket, sentence);
         char msg[SENTENCE_LEN];
@@ -699,9 +627,6 @@ int main(int argc, char *argv[]) {
 
         // printf("status: %d\n",status);
 
-        // TODO status!!!
-        // 现在直接进PASV会卡死，不PASS
-        // printf("status: %d\n",status);
     }
 
     close(control_socket);
