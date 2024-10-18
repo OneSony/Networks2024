@@ -54,7 +54,7 @@ int path_convert(char *path) { // 输入client的路径，输出server中的绝�
     char resolved_path[800];
 
     if (realpath(server_path, resolved_path) == NULL) { // 不存在
-        perror("realpath error for root\n");
+        perror("realpath error for root");
         return 1;
     }
 
@@ -808,6 +808,10 @@ int handle_request(char *msg) {
             strcpy(filepath, path);
             filepath[strlen(filepath) - strlen(filename)] = '\0';
 
+            if (strcmp(filepath, "") == 0) {
+                strcpy(filepath, ".");
+            }
+
             int ret = path_convert(filepath);
             printf("path: %s\n", filepath);
 
@@ -954,8 +958,70 @@ int handle_request(char *msg) {
             send_msg(control_socket, "501 Please provide a parameter.\r\n");
             return 0;
         }
+
+        if (status == PORT || status == PASV) {
+
+            int ret = path_check(req.parameter);
+
+            if (ret == 1) {
+                send_msg(control_socket,
+                         "451 Paths cannot contain \"../\".\r\n");
+                return 0;
+            } else {
+
+                char path[256];
+                sscanf(req.parameter, "%s", path);
+                printf("path: %s\n", path);
+
+                // 要先去掉文件的名称，看看之前的目录存不存在，用convert
+
+                char filename[256];
+                char filepath[256];
+
+                basename(path,
+                         filename); // TODO 检查如果给了个文件目录？？！！！
+                if (strcmp(filename, "") == 0) {
+                    send_msg(control_socket, "451 Please provide a file.\r\n");
+                    return 0;
+                }
+                strcpy(filepath, path);
+                filepath[strlen(filepath) - strlen(filename)] = '\0';
+
+                if (strcmp(filepath, "") == 0) {
+                    strcpy(filepath, ".");
+                }
+
+                int ret = path_convert(filepath);
+                printf("path: %s\n", filepath);
+
+                if (ret == 0) { // 目录没有越界, 并且存在
+                    char real_path[256];
+                    strcpy(real_path, filepath); // 返回值最后不含/
+                    strcat(real_path, "/");
+                    strcat(real_path, filename);
+
+                    strcpy(req.parameter, real_path); // DTP要看req
+
+                    printf("in STOR\n");
+                    DTP(req);      // DTP中消息已经处理完
+                    status = PASS; // 真正用了再expire之前的DTP
+                    return 0;
+                } else if (ret == 1) {
+                    send_msg(control_socket, "451 Path is not exist.\r\n");
+                    return 0;
+                } else {
+                    send_msg(control_socket, "550 Path is not available.\r\n");
+                    return 0;
+                }
+            }
+        } else {
+            send_msg(control_socket, "425 Please use PORT or PASV first.\r\n");
+            return 0;
+        }
+
         if (status == PORT || status == PASV) {
             // 不需要路经检查，因为STOR只会存储到当前路径
+            // STOR的参数是存储到服务器的路径！！！！！！！！！！！
             char temp[256];
             basename(req.parameter, temp);
             strcpy(req.parameter, temp);

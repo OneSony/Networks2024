@@ -142,9 +142,13 @@ int DTP(struct request req) { // TODO 错误处理
         if (strcmp(req.verb, "RETR") == 0) {
 
             // printf("get_file %s\n", req.parameter);
-            char filename[256];
-            basename(req.parameter, filename);
-            file = fopen(filename, "wb"); // 保存到当前目录
+
+            if (file == NULL) { // 如果没有别的地方打开file
+                char filename[256];
+                basename(req.parameter, filename);
+                file = fopen(filename, "wb"); // 保存到当前目录
+            }
+
             if (file == NULL) {
                 printf("Error fopen(): %s(%d)\n", strerror(errno), errno);
                 close(data_socket);
@@ -167,7 +171,14 @@ int DTP(struct request req) { // TODO 错误处理
 
         } else if (strcmp(req.verb, "STOR") == 0) {
 
-            file = fopen(req.parameter, "rb");
+            if (file == NULL) { // 如果没有别的地方打开file
+                char filename[256];
+                basename(req.parameter, filename);
+                // printf("filename: %s\n", filename);
+                file = fopen(filename, "rb"); // 保存到当前目录
+            }
+
+            // file = fopen(req.parameter, "rb"); //parameter是server的路径
             if (file == NULL) {
                 printf("Error fopen(): %s(%d)\n", strerror(errno), errno);
                 close(data_socket);
@@ -185,7 +196,8 @@ int DTP(struct request req) { // TODO 错误处理
             fclose(file);
             file = NULL;
 
-        } else if (strcmp(req.verb, "LIST") == 0) { // TODO我怎么知道什么时候结束
+        } else if (strcmp(req.verb, "LIST") ==
+                   0) { // TODO我怎么知道什么时候结束
             char buffer[1024];
             int n;
 
@@ -613,7 +625,7 @@ int handle_request(char *sentence) {
             DTP(req);
         }
 
-        //status = PASS; 这样会导致下次传输的时候不知道用PORT还是PASV
+        // status = PASS; 这样会导致下次传输的时候不知道用PORT还是PASV
     } else {
         printf("Unsupport command\n");
     }
