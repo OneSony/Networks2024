@@ -263,6 +263,15 @@ int DTP(struct request req) { // TODO 错误处理
                 // sleep(2);
                 fwrite(buff, 1, n, file);
             }
+
+            if (n == -1) {
+                perror("read");
+                printf("Error read(): %s(%d)\n", strerror(errno), errno);
+                close(data_socket);
+                data_socket = -1;
+                exit(1);
+            }
+
             printf("retr success\n");
 
             // pipe可以传输当前传递了多少
@@ -275,7 +284,7 @@ int DTP(struct request req) { // TODO 错误处理
             if (file == NULL) { // 如果没有别的地方打开file
                 char filename[256];
                 basename(req.parameter, filename);
-                // printf("filename: %s\n", filename);
+                printf("filename: %s\n", filename);
                 file = fopen(filename, "rb"); // 保存到当前目录
             }
 
@@ -290,7 +299,17 @@ int DTP(struct request req) { // TODO 错误处理
             char buff[256];
             int n;
             while ((n = fread(buff, 1, 256, file)) > 0) { // 从file读入sockt
-                write(data_socket, buff, n);
+                if (write(data_socket, buff, n) == -1) {  // TODO 网络断开
+                    fclose(file);
+                    file = NULL;
+                    perror("write");
+                    printf("Error write(): %s(%d)\n", strerror(errno),
+                           errno); // TODO
+
+                    close(data_socket);
+                    data_socket = -1;
+                    exit(1);
+                }
             }
 
             // printf("send file success\n");
@@ -350,6 +369,15 @@ void close_DTP(int sig) {
     // 处理 SIGTERM 信号，执行清理操作
 
     printf("Child process: Received SIGTERM, exiting...\n");
+
+
+    //给主进程发消息
+
+
+    //hang up
+    //等待主进程回复
+
+    //收到426后
 
     if (control_socket != -1) {
         close(control_socket);

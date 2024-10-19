@@ -158,6 +158,7 @@ int DTP(struct request req) { // 这里的路径要直接可以操作
     if (status == PORT) {
         if (0 !=
             connect_to(&data_socket, port_mode_info.ip, port_mode_info.port)) {
+            data_socket = -1;
             printf("connect_to error\n");
             send_msg(control_socket,
                      "425 no TCP connection was established\r\n");
@@ -184,7 +185,12 @@ int DTP(struct request req) { // 这里的路径要直接可以操作
     // int p_fds[2]; //父子进程通讯通道
     if (pipe(p_fds) == -1) {
         perror("pipe");
-        exit(1);
+        send_msg(control_socket, "500 Internal error.\r\n"); //还在主进程里
+
+        close(data_socket);
+        data_socket = -1;
+        status = PASS;
+        return 0;
     }
 
     printf("pipe success\n");
