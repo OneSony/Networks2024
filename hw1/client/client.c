@@ -81,6 +81,8 @@ int data_socket = -1;
 
 int dtp_pid = -1;
 
+int p_fds[2] = {-1, -1};
+
 int binary_mode;
 
 struct port_mode_info_s port_mode_info;
@@ -119,6 +121,14 @@ void exit_connection() {
     if (pfile != NULL) {
         pclose(pfile);
         pfile = NULL;
+    }
+
+    if (p_fds[0] != -1) {
+        close(p_fds[0]);
+    }
+
+    if (p_fds[1] != -1) {
+        close(p_fds[1]);
     }
 
     exit(0);
@@ -201,14 +211,117 @@ int basename(char *path, char *filename) {
     return 0;
 }
 
+void handle_abor(int sig) { // 主进程使用
+
+    if (dtp_pid == -1 || kill(dtp_pid, 0) != 0) { // 没有子进程
+        return;
+    }
+
+    kill(dtp_pid, SIGTERM); // 让子进程进入等待
+    send_msg(control_socket, "ABOR\r\n");
+    printf("ABOR sent.\n");
+
+    char msg[SENTENCE_LEN];
+    printf("waiting.\n");
+    get_msg(control_socket,
+            msg); // TODO 如果超时怎么办，超时了就当对面不能响应！！
+
+    if (msg[0] == '4') {
+        printf("ABOR success\n");
+        int pid_signal = 0; // 继续执行退出
+        write(p_fds[1], &pid_signal, sizeof(pid_signal));
+    } else {
+        printf("ABOR fail\n");
+        int pid_signal = 1; // 不退出
+        write(p_fds[1], &pid_signal, sizeof(pid_signal));
+    }
+
+    // 然后返回waitpid位置，根据子进程的情况决定是否退出
+}
+
+void close_DTP(int sig) {
+    // 处理 SIGTERM 信号，执行清理操作
+
+    printf("Child process: Received SIGTERM, exiting...\n");
+
+    // hang up
+    // 等待主进程回复
+
+    int ret;
+    read(p_fds[0], &ret, sizeof(ret));
+
+    if (ret == 0) { // 继续退出
+
+        if (control_socket != -1) {
+            close(control_socket);
+        }
+
+        if (control_listen_socket != -1) {
+            close(control_listen_socket);
+        }
+
+        if (data_listen_socket != -1) {
+            close(data_listen_socket);
+        }
+
+        if (data_socket != -1) {
+            close(data_socket);
+        }
+
+        if (file != NULL) {
+            fclose(file);
+            file = NULL;
+        }
+
+        if (pfile != NULL) {
+            pclose(pfile);
+            pfile = NULL;
+        }
+
+        if (file != NULL) {
+            fclose(file);
+            file = NULL;
+        }
+
+        if (pfile != NULL) {
+            pclose(pfile);
+            pfile = NULL;
+        }
+
+        if (p_fds[0] != -1) {
+            close(p_fds[0]);
+        }
+
+        if (p_fds[1] != -1) {
+            close(p_fds[1]);
+        }
+
+        printf("Child process: ok\n");
+
+        exit(2);
+    }
+
+    printf("back to normal\n");
+
+    return;
+}
+
 int DTP(struct request req) { // TODO 错误处理
     // DTP遇到问题就退出，主进程等server发消息
     // 主进程不需要给DTP发消息，DTP自己处理
     // 检查一下是不是真的会退出
 
+    if (pipe(p_fds) == -1) {
+        perror("pipe");
+        char msg[SENTENCE_LEN];
+        get_msg(control_socket, msg); // 等待错误消息
+        return 0;
+    }
+
     dtp_pid = fork();
-    if (dtp_pid == 0) { // 创建DTP
-        signal(SIGINT, close_DTP);
+    if (dtp_pid == 0) {          // 创建DTP
+        signal(SIGINT, SIG_IGN); // 停止监听键盘
+        signal(SIGTERM, close_DTP);
 
         // 正常传输退出 0
         // 异常退出 1
@@ -216,12 +329,17 @@ int DTP(struct request req) { // TODO 错误处理
         close(control_socket);
         control_socket = -1;
 
+        close(p_fds[1]); // 关闭写，子进程只需要读取
+        p_fds[1] = -1;
+
         if (status == PORT) {
 
             if ((data_socket = accept_with_timeout(data_listen_socket)) ==
                 -1) { // TODO直接结束进程？？
                 close(data_listen_socket);
                 data_listen_socket = -1;
+                close(p_fds[0]);
+                p_fds[0] = -1;
                 exit(1);
             } else {
                 close(data_listen_socket);
@@ -229,10 +347,11 @@ int DTP(struct request req) { // TODO 错误处理
             }
 
         } else if (status == PASV) {
-            // TODO
             if (0 != connect_to(&data_socket, pasv_mode_info.ip,
                                 pasv_mode_info.port)) {
                 printf("connect_to error\n");
+                close(p_fds[0]);
+                p_fds[0] = -1;
                 exit(1);
             }
         }
@@ -253,6 +372,8 @@ int DTP(struct request req) { // TODO 错误处理
                 printf("Error fopen(): %s(%d)\n", strerror(errno), errno);
                 close(data_socket);
                 data_socket = -1;
+                close(p_fds[0]);
+                p_fds[0] = -1;
                 exit(1);
             }
 
@@ -269,6 +390,8 @@ int DTP(struct request req) { // TODO 错误处理
                 printf("Error read(): %s(%d)\n", strerror(errno), errno);
                 close(data_socket);
                 data_socket = -1;
+                close(p_fds[0]);
+                p_fds[0] = -1;
                 exit(1);
             }
 
@@ -293,6 +416,8 @@ int DTP(struct request req) { // TODO 错误处理
                 printf("Error fopen(): %s(%d)\n", strerror(errno), errno);
                 close(data_socket);
                 data_socket = -1;
+                close(p_fds[0]);
+                p_fds[0] = -1;
                 exit(1);
             }
 
@@ -308,6 +433,8 @@ int DTP(struct request req) { // TODO 错误处理
 
                     close(data_socket);
                     data_socket = -1;
+                    close(p_fds[0]);
+                    p_fds[0] = -1;
                     exit(1);
                 }
             }
@@ -331,31 +458,38 @@ int DTP(struct request req) { // TODO 错误处理
                 perror("recv");
                 close(data_socket);
                 data_socket = -1;
+                close(p_fds[0]);
+                p_fds[0] = -1;
                 exit(1);
             }
         }
-
+        // 正常退出
         close(data_socket);
         data_socket = -1;
+        close(p_fds[0]);
+        p_fds[0] = -1;
         exit(0);
     } else if (dtp_pid > 0) {
-        signal(SIGINT, SIG_IGN); // TODO
+        signal(SIGINT, handle_abor);
+
+        close(p_fds[0]); // 关闭读，主进程只需要写
+        p_fds[0] = -1;
 
         int pid_signal;
         waitpid(dtp_pid, &pid_signal, 0); // 等待子进程结束
+
+        close(p_fds[1]);
+        p_fds[1] = -1;
+
         signal(SIGINT, SIG_DFL);
 
         char msg[SENTENCE_LEN];
 
         if (WEXITSTATUS(pid_signal) == 2) { // 被退出  注意是WEXITSTATUS
-            // TODO
-            get_msg(control_socket, msg); // 150
+            get_msg(control_socket, msg);   // 226 正确ABOR
         } else {
             get_msg(control_socket, msg); // 150
         }
-
-        // TODO 键盘输入，处理ABOR
-        // 退出问题，等待msg
     } else {
         perror("fork");
         char msg[SENTENCE_LEN];
@@ -363,61 +497,6 @@ int DTP(struct request req) { // TODO 错误处理
     }
 
     return 0;
-}
-
-void close_DTP(int sig) {
-    // 处理 SIGTERM 信号，执行清理操作
-
-    printf("Child process: Received SIGTERM, exiting...\n");
-
-
-    //给主进程发消息
-
-
-    //hang up
-    //等待主进程回复
-
-    //收到426后
-
-    if (control_socket != -1) {
-        close(control_socket);
-    }
-
-    if (control_listen_socket != -1) {
-        close(control_listen_socket);
-    }
-
-    if (data_listen_socket != -1) {
-        close(data_listen_socket);
-    }
-
-    if (data_socket != -1) {
-        close(data_socket);
-    }
-
-    if (file != NULL) {
-        fclose(file);
-        file = NULL;
-    }
-
-    if (pfile != NULL) {
-        pclose(pfile);
-        pfile = NULL;
-    }
-
-    if (file != NULL) {
-        fclose(file);
-        file = NULL;
-    }
-
-    if (pfile != NULL) {
-        pclose(pfile);
-        pfile = NULL;
-    }
-
-    printf("Child process: ok\n");
-
-    exit(2); // TODO
 }
 
 int send_msg(int sockfd, char *sentence) {
