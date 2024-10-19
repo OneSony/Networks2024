@@ -794,9 +794,6 @@ int handle_request(char *sentence) {
                 return 0;
             }
 
-            sprintf(pasv_mode_info.ip, "%d.%d.%d.%d", ip1, ip2, ip3, ip4);
-            pasv_mode_info.port = port1 * 256 + port2;
-
             send_msg(control_socket, sentence);
             get_msg(control_socket, msg);
 
@@ -871,8 +868,7 @@ int handle_request(char *sentence) {
 
 int main(int argc, char *argv[]) {
 
-    char local_ip[16] = "127.0.0.1";
-    strcpy(port_mode_info.ip, local_ip);
+    strcpy(port_mode_info.ip, "127.0.0.1"); // 本机ip
 
     char server_ip[16] = "127.0.0.1";
     int server_port = 21;
@@ -909,6 +905,22 @@ int main(int argc, char *argv[]) {
         printf("cannot connect to the server\n");
         return 1;
     }
+
+    // 获取本机信息
+    // struct sockaddr_in local_addr;
+    // socklen_t addr_len = sizeof(local_addr);
+    // if (getsockname(control_socket, (struct sockaddr *)&local_addr,
+    // &addr_len) <
+    //    0) {
+    //    printf("Error getsockname(): %s(%d)\n", strerror(errno), errno);
+    //}
+
+    // 将本机 IP 地址转换为字符串
+    // inet_ntop(AF_INET, &local_addr.sin_addr, port_mode_info.ip,
+    //          sizeof(port_mode_info.ip));
+
+    // 打印本机的 IP 地址
+    // printf("Local IP: %s\n", port_mode_info.ip);
 
     // 欢迎信息
     char msg[SENTENCE_LEN];

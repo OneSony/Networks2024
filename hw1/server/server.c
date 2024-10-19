@@ -1295,6 +1295,22 @@ int main(int argc, char *argv[]) {
             continue;
         }
 
+        // struct sockaddr_in local_addr;
+        // socklen_t addr_len = sizeof(local_addr);
+
+        // 获取本机信息
+        // if (getsockname(control_socket, (struct sockaddr *)&local_addr,
+        //                &addr_len) == -1) {
+        //    printf("Error getsockname(): %s(%d)\n", strerror(errno), errno);
+        //}
+
+        // 将 IP 地址转换为字符串
+        // inet_ntop(AF_INET, &local_addr.sin_addr, pasv_mode_info.ip,
+        //          sizeof(pasv_mode_info.ip));
+
+        //// 打印本机的 IP 地址
+        // printf("Local IP: %s\n", pasv_mode_info.ip);
+
         printf("controlfd: %d\n", control_socket);
 
         int pid = fork();
