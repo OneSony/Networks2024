@@ -74,10 +74,12 @@ void close_DTP(int sig);
 
 enum user_status status;
 
-int control_listen_socket;
-int control_socket;
-int data_listen_socket;
-int data_socket;
+int control_listen_socket = -1;
+int control_socket = -1;
+int data_listen_socket = -1;
+int data_socket = -1;
+
+int dtp_pid = -1;
 
 int binary_mode;
 
@@ -87,7 +89,40 @@ struct pasv_mode_info_s pasv_mode_info;
 FILE *file = NULL;
 FILE *pfile = NULL;
 
-int p_fds[2];
+void exit_connection() {
+    if (dtp_pid != -1 && kill(dtp_pid, 0) == 0) {
+        kill(dtp_pid, SIGTERM);
+        waitpid(dtp_pid, NULL, 0); // 等待子进程终止
+    }
+
+    if (control_socket != -1) {
+        close(control_socket);
+    }
+
+    if (control_listen_socket != -1) {
+        close(control_listen_socket);
+    }
+
+    if (data_listen_socket != -1) {
+        close(data_listen_socket);
+    }
+
+    if (data_socket != -1) {
+        close(data_socket);
+    }
+
+    if (file != NULL) {
+        fclose(file);
+        file = NULL;
+    }
+
+    if (pfile != NULL) {
+        pclose(pfile);
+        pfile = NULL;
+    }
+
+    exit(0);
+}
 
 int read_with_timeout(int sockfd, char *ch) { // 为DTP设计
 
@@ -171,23 +206,26 @@ int DTP(struct request req) { // TODO 错误处理
     // 主进程不需要给DTP发消息，DTP自己处理
     // 检查一下是不是真的会退出
 
-    int pid = fork();
-    if (pid == 0) { // 创建DTP
+    dtp_pid = fork();
+    if (dtp_pid == 0) { // 创建DTP
         signal(SIGINT, close_DTP);
 
         // 正常传输退出 0
         // 异常退出 1
         // ctrl + c退出 2
         close(control_socket);
+        control_socket = -1;
 
         if (status == PORT) {
 
             if ((data_socket = accept_with_timeout(data_listen_socket)) ==
                 -1) { // TODO直接结束进程？？
                 close(data_listen_socket);
+                data_listen_socket = -1;
                 exit(1);
             } else {
                 close(data_listen_socket);
+                data_listen_socket = -1;
             }
 
         } else if (status == PASV) {
@@ -214,6 +252,7 @@ int DTP(struct request req) { // TODO 错误处理
             if (file == NULL) {
                 printf("Error fopen(): %s(%d)\n", strerror(errno), errno);
                 close(data_socket);
+                data_socket = -1;
                 exit(1);
             }
 
@@ -244,6 +283,7 @@ int DTP(struct request req) { // TODO 错误处理
             if (file == NULL) {
                 printf("Error fopen(): %s(%d)\n", strerror(errno), errno);
                 close(data_socket);
+                data_socket = -1;
                 exit(1);
             }
 
@@ -271,17 +311,19 @@ int DTP(struct request req) { // TODO 错误处理
             if (n == -1) {
                 perror("recv");
                 close(data_socket);
+                data_socket = -1;
                 exit(1);
             }
         }
 
         close(data_socket);
+        data_socket = -1;
         exit(0);
-    } else {
+    } else if (dtp_pid > 0) {
         signal(SIGINT, SIG_IGN); // TODO
 
         int pid_signal;
-        waitpid(pid, &pid_signal, 0); // 等待子进程结束
+        waitpid(dtp_pid, &pid_signal, 0); // 等待子进程结束
         signal(SIGINT, SIG_DFL);
 
         char msg[SENTENCE_LEN];
@@ -295,6 +337,10 @@ int DTP(struct request req) { // TODO 错误处理
 
         // TODO 键盘输入，处理ABOR
         // 退出问题，等待msg
+    } else {
+        perror("fork");
+        char msg[SENTENCE_LEN];
+        get_msg(control_socket, msg); // 等待错误消息
     }
 
     return 0;
@@ -305,6 +351,22 @@ void close_DTP(int sig) {
 
     printf("Child process: Received SIGTERM, exiting...\n");
 
+    if (control_socket != -1) {
+        close(control_socket);
+    }
+
+    if (control_listen_socket != -1) {
+        close(control_listen_socket);
+    }
+
+    if (data_listen_socket != -1) {
+        close(data_listen_socket);
+    }
+
+    if (data_socket != -1) {
+        close(data_socket);
+    }
+
     if (file != NULL) {
         fclose(file);
         file = NULL;
@@ -314,8 +376,17 @@ void close_DTP(int sig) {
         pclose(pfile);
         pfile = NULL;
     }
-    // TODO -1
-    close(data_socket);
+
+    if (file != NULL) {
+        fclose(file);
+        file = NULL;
+    }
+
+    if (pfile != NULL) {
+        pclose(pfile);
+        pfile = NULL;
+    }
+
     printf("Child process: ok\n");
 
     exit(2); // TODO
@@ -326,7 +397,7 @@ int send_msg(int sockfd, char *sentence) {
     int p = 0;
     while (p < len) {
         int n = write(sockfd, sentence + p, len - p);
-        if (n < 0) {
+        if (n < 0) { // close
             printf("Error write(): %s(%d)\n", strerror(errno), errno);
             return 1;
         } else {
@@ -351,6 +422,7 @@ int connect_to(int *sockfd, char *ip, int port) {
     if (connect(*sockfd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
         printf("Error connect(): %s(%d)\n", strerror(errno), errno);
         close(*sockfd);
+        *sockfd = -1;
         return 1;
     }
 
@@ -359,6 +431,7 @@ int connect_to(int *sockfd, char *ip, int port) {
 
 int get_msg(int sockfd,
             char *sentence) { // 只会在主进程，以及没有子进程存在的时候调用
+    // 避免一下进来很多条消息
 
     int start = 0, end = 0;
 
@@ -386,21 +459,8 @@ int get_msg(int sockfd,
             if (ret == -1) {
                 return -1;
             } else if (ret == 1) { // close
-                if (file != NULL) {
-                    fclose(file);
-                    file = NULL;
-                }
-
-                if (pfile != NULL) {
-                    pclose(pfile);
-                    pfile = NULL;
-                }
-                // TODO !!!close更多东西
-                close(control_socket);
-
                 printf("Connection closed by the host.\n");
-
-                exit(0);
+                exit_connection();
             } else {
                 // printf("%c", ch);
                 //  将读取到的字符存储到句子中
@@ -463,10 +523,12 @@ int listen_at(int *sockfd, int port) {
         if (errno == EADDRINUSE) {
             printf("Error bind(): Port %d is already in use.\n", port);
             close(*sockfd);
+            *sockfd = -1;
             return 2; // 返回2表示端口已被占用
         } else {
             printf("Error bind(): %s(%d)\n", strerror(errno), errno);
             close(*sockfd);
+            *sockfd = -1;
             return 1; // 返回1表示绑定失败
         }
     }
@@ -474,6 +536,7 @@ int listen_at(int *sockfd, int port) {
     if (listen(*sockfd, 5) == -1) {
         printf("Error listen(): %s(%d)\n", strerror(errno), errno);
         close(*sockfd);
+        *sockfd = -1;
         return 1;
     }
 
@@ -541,8 +604,9 @@ int handle_request(char *sentence) {
         get_msg(control_socket, msg);
     } else if (strcmp(req.verb, "PORT") == 0) {
 
-        if (status == PORT) {
+        if (data_listen_socket != -1) {
             close(data_listen_socket);
+            data_listen_socket = -1;
         }
 
         if (strcmp(req.parameter, "") == 0) { // 未指定
@@ -573,6 +637,7 @@ int handle_request(char *sentence) {
                 status = PORT;
             } else {
                 close(data_listen_socket);
+                data_listen_socket = -1;
             }
 
         } else { // 指定了
@@ -599,12 +664,14 @@ int handle_request(char *sentence) {
                 status = PORT;
             } else {
                 close(data_listen_socket);
+                data_listen_socket = -1;
             }
         }
 
     } else if (strcmp(req.verb, "PASV") == 0) {
-        if (status == PORT) {
+        if (data_listen_socket != -1) {
             close(data_listen_socket);
+            data_listen_socket = -1;
         }
 
         send_msg(control_socket, sentence);
@@ -709,4 +776,7 @@ int main(int argc, char *argv[]) {
     }
 
     close(control_socket);
+    control_socket = -1;
+
+    exit_connection();
 }
