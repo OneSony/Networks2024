@@ -328,13 +328,20 @@ int DTP(struct request req) { // 这里的路径要直接可以操作
             fclose(file);
             file = NULL;
 
-        } else if (strcmp(req.verb, "LIST") == 0) {
+        } else if (strcmp(req.verb, "LIST") == 0 ||
+                   strcmp(req.verb, "NLST") == 0) {
             char buffer[1024];
             char command[1025];
 
             // 构建 ls 命令（指定路径）
-            snprintf(command, sizeof(command), "/bin/ls -l %s",
-                     req.parameter); // TODO 第一行是总大小！！！
+
+            if (strcmp(req.verb, "LIST") == 0) {
+                snprintf(command, sizeof(command), "/bin/ls -l %s",
+                         req.parameter); // TODO 第一行是总大小！！！
+            } else if (strcmp(req.verb, "NLST") == 0) {
+                snprintf(command, sizeof(command), "/bin/ls -1F %s",
+                         req.parameter);
+            }
             printf("command: %s\n", command);
 
             // 打开 ls 命令的输出（只读模式）
@@ -354,6 +361,15 @@ int DTP(struct request req) { // 这里的路径要直接可以操作
             // 有问题！！！！！！！！！！！！！
             //  逐行读取 ls 的输出并通过 socket 发送给客户端
             while (fgets(buffer, sizeof(buffer), pfile) != NULL) {
+
+                if (strcmp(req.verb, "NLST") == 0) { // 替换空字符
+                    for (size_t i = 0; i < strlen(buffer); i++) {
+                        if (buffer[i] == '\000') {
+                            buffer[i] = '\012'; // 替换为换行符
+                        }
+                    }
+                }
+
                 size_t len = strlen(buffer);
                 if (buffer[len - 1] == '\n') {
                     buffer[len - 1] = '\r';
@@ -742,7 +758,7 @@ int handle_request(char *msg) {
         return 1;
     } else if (strcmp(req.verb, "ABOR") == 0) {
         if (status == PASS) {
-            send_msg(control_socket, "225 No transfer to abort.\r\n");
+            send_msg(control_socket, "225 No transfer to abort.\r\n"); // TODO
             return 0;
         } else if (status == PASV) {
             if (data_listen_socket != -1) {
@@ -795,8 +811,7 @@ int handle_request(char *msg) {
             binary_mode = 1; // on
             return 0;
         } else {
-            send_msg(control_socket,
-                     "500 Server just support TYPE I.\r\n"); // TODO
+            send_msg(control_socket, "504 Server just support TYPE I.\r\n");
             return 0;
         }
     } else if (strcmp(req.verb, "SIZE") == 0) {
@@ -821,9 +836,8 @@ int handle_request(char *msg) {
                 // 使用 stat 函数获取文件状态
                 if (stat(req.parameter, &path_stat) != 0) {
                     printf("Error stat(): %s(%d)\n", strerror(errno), errno);
-                    send_msg(
-                        control_socket,
-                        "550 Path is not available.\r\n"); // TODO interal error
+                    send_msg(control_socket,
+                             "500 Internal error.\r\n"); // TODO
                     return 0;
                 }
 
@@ -1091,8 +1105,7 @@ int handle_request(char *msg) {
                 char filename[256];
                 char filepath[256];
 
-                basename(path,
-                         filename); // TODO 检查如果给了个文件目录？？！！！
+                basename(path, filename);
                 if (strcmp(filename, "") == 0) {
                     send_msg(control_socket, "451 Please provide a file.\r\n");
                     offset = 0;
@@ -1136,7 +1149,7 @@ int handle_request(char *msg) {
             offset = 0;
             return 0;
         }
-    } else if (strcmp(req.verb, "LIST") == 0) {
+    } else if (strcmp(req.verb, "LIST") == 0 || strcmp(req.verb, "NLST") == 0) {
         if (status == PORT || status == PASV) {
 
             if (strcmp(req.parameter, "") == 0) {
@@ -1151,7 +1164,7 @@ int handle_request(char *msg) {
                 if (stat(req.parameter, &path_stat) != 0) {
                     perror("stat error");
                     send_msg(control_socket,
-                             "550 Path is not available.\r\n"); // TODO
+                             "500 Internal error.\r\n"); // TODO
                     return 0;
                 }
 
@@ -1208,7 +1221,7 @@ int handle_request(char *msg) {
     } else if (status == USER) {
         send_msg(control_socket, "530 Please login with PASS.\r\n");
     } else {
-        send_msg(control_socket, "500 retry.\r\n");
+        send_msg(control_socket, "500 retry.\r\n"); // TODO
     }
     return 0;
 }
