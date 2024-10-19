@@ -202,7 +202,7 @@ int DTP(struct request req) { // 这里的路径要直接可以操作
         close(p_fds[0]); // 关闭管道的读取端
         p_fds[0] = -1;
 
-        int pid_signal;
+        int pid_signal = 0;
 
         if (strcmp(req.verb, "RETR") == 0) {
 
@@ -223,6 +223,7 @@ int DTP(struct request req) { // 这里的路径要直接可以操作
             char buff[256];
             int n;
             while ((n = fread(buff, 1, 256, file)) > 0) { // 从file读入sockt
+                // printf("n: %d\n", n);
                 if (write(data_socket, buff, n) == -1) {
                     fclose(file);
                     file = NULL;
@@ -264,6 +265,20 @@ int DTP(struct request req) { // 这里的路径要直接可以操作
             while ((n = read(data_socket, buff, 256)) > 0) { // 从socket读入file
                 fwrite(buff, 1, n, file);                    // 本地文件！
             } // TODO 是不知道发送完的！
+
+            if (n == -1) {
+                fclose(file);
+                file = NULL;
+                perror("read");
+                printf("Error read(): %s(%d)\n", strerror(errno), errno);
+                pid_signal = 2;
+                write(p_fds[1], &pid_signal, sizeof(pid_signal));
+                close(data_socket);
+                data_socket = -1;
+                close(p_fds[1]);
+                p_fds[1] = -1;
+                exit(2);
+            }
 
             fclose(file);
             file = NULL;
@@ -392,6 +407,8 @@ int DTP(struct request req) { // 这里的路径要直接可以操作
             if (fds[1].revents & POLLIN) {
                 int ret;
                 read(p_fds[0], &ret, sizeof(ret));
+
+                // printf("code %d.\n", ret);
 
                 if (ret == 0) {
                     send_msg(control_socket, "226 Transfer complete.\r\n");
