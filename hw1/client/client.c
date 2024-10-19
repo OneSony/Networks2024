@@ -754,20 +754,21 @@ int handle_request(char *sentence) {
         if (strcmp(req.parameter, "") == 0) { // 未指定
 
             while (1) { // 随机选一个端口
-                pasv_mode_info.port =
+                port_mode_info.port =
                     rand() % (MAX_PORT - MIN_PORT + 1) + MIN_PORT;
                 // printf("**data_port: %d\n", port);
-                if (listen_at(&data_listen_socket, pasv_mode_info.port) == 0) {
+                if (listen_at(&data_listen_socket, port_mode_info.port) == 0) {
                     break;
                 }
             }
 
             int p1, p2, p3, p4;
-            sscanf(pasv_mode_info.ip, "%d.%d.%d.%d", &p1, &p2, &p3, &p4);
+            sscanf(port_mode_info.ip, "%d.%d.%d.%d", &p1, &p2, &p3,
+                   &p4); // TODO
 
             char buff[256];
             sprintf(buff, "PORT %d,%d,%d,%d,%d,%d\r\n", p1, p2, p3, p4,
-                    pasv_mode_info.port / 256, pasv_mode_info.port % 256);
+                    port_mode_info.port / 256, port_mode_info.port % 256);
 
             send_msg(control_socket, buff);
             get_msg(control_socket, msg);
@@ -870,10 +871,11 @@ int handle_request(char *sentence) {
 
 int main(int argc, char *argv[]) {
 
+    char local_ip[16] = "127.0.0.1";
+    strcpy(port_mode_info.ip, local_ip);
+
     char server_ip[16] = "127.0.0.1";
     int server_port = 21;
-
-    strcpy(pasv_mode_info.ip, server_ip);
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-ip") == 0) {
@@ -897,6 +899,8 @@ int main(int argc, char *argv[]) {
             exit(EXIT_FAILURE);
         }
     }
+
+    strcpy(pasv_mode_info.ip, server_ip); // 不过PASV过程中会记录server IP
 
     // printf("ip: %s\n", server_ip);
     // printf("port: %d\n", server_port);

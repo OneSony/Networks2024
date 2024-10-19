@@ -798,7 +798,10 @@ int handle_request(char *msg) {
         }
     } else if (strcmp(req.verb, "PASS") == 0) {
         if (status == USER) {
-            send_msg(control_socket, "230 Login successful.\r\n");
+            // send_msg(control_socket, "230 Login successful.\r\n");
+            send_msg(control_socket,
+                     "230-\r\n230-Welcome to\r\n230- my FTP "
+                     "server\r\n230-\r\n230 Login successful.\r\n");
             status = PASS;
             return 0;
         }
@@ -873,9 +876,8 @@ int handle_request(char *msg) {
         if (status == PASS || status == PORT || status == PASV) {
             char path[256];
 
-            get_cwd(path);
+            get_cwd(path); // rewrite在这里
             printf("path: %s\n", path);
-            // TODO rewrite
             char buff[400];
             sprintf(buff, "257 \"%s\" is the current directory.\r\n", path);
             send_msg(control_socket, buff);
@@ -1236,7 +1238,7 @@ int main(int argc, char *argv[]) {
 
     int port = 21;                  // 默认端口
     strcpy(root_directory, "/tmp"); // 用于存储根目录，确保分配足够的空间
-    strcpy(pasv_mode_info.ip, "127.0.0.1");
+    strcpy(pasv_mode_info.ip, "127.0.0.1"); // 默认本机ip
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-port") == 0) {
