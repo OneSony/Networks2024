@@ -339,7 +339,12 @@ int DTP(struct request req) { // 这里的路径要直接可以操作
                 snprintf(command, sizeof(command), "/bin/ls -l %s",
                          req.parameter); // TODO 第一行是总大小！！！
             } else if (strcmp(req.verb, "NLST") == 0) {
-                snprintf(command, sizeof(command), "/bin/ls -1F %s",
+                // snprintf(command, sizeof(command), "find '%s' -maxdepth 1
+                // -type d -not -name '.' -printf '%%f/\\n' -o -type f -printf
+                // '%%f\\n'", req.parameter); snprintf(command, sizeof(command),
+                // "ls -1F %s", req.parameter);
+                snprintf(command, sizeof(command),
+                         "ls -1F %s | sed 's/\\*\\|@\\|=\\|\\s*$//g'",
                          req.parameter);
             }
             printf("command: %s\n", command);
