@@ -1,5 +1,5 @@
 #include "server.h"
-// SOCKET 初始化！！！！！！！！！！
+
 //  control socket: USER PASS QUIT SYST TYPE PORT PASV MKD CWD PWD
 //  data socket: RETR STOR LIST
 
@@ -13,6 +13,8 @@ int data_listen_socket = -1;
 int data_socket = -1;
 
 int binary_mode;
+
+long long offset = 0;
 
 struct port_mode_info_s port_mode_info;
 struct pasv_mode_info_s pasv_mode_info;
@@ -185,7 +187,7 @@ int DTP(struct request req) { // 这里的路径要直接可以操作
     // int p_fds[2]; //父子进程通讯通道
     if (pipe(p_fds) == -1) {
         perror("pipe");
-        send_msg(control_socket, "500 Internal error.\r\n"); //还在主进程里
+        send_msg(control_socket, "500 Internal error.\r\n"); // 还在主进程里
 
         close(data_socket);
         data_socket = -1;
@@ -226,6 +228,23 @@ int DTP(struct request req) { // 这里的路径要直接可以操作
                 exit(1);
             }
 
+            if (offset != 0) {
+                if (fseek(file, offset, SEEK_SET) != 0) {
+                    perror("fseek");
+                    fclose(file);
+                    file = NULL;
+                    pid_signal = 1;
+                    write(p_fds[1], &pid_signal, sizeof(pid_signal));
+                    close(data_socket);
+                    data_socket = -1;
+                    close(p_fds[1]);
+                    p_fds[1] = -1;
+                    exit(1); // TODO 有必要退出的，因为此时client以为从这里开始
+                }
+            }
+
+            printf("RETR offset: %lld\n", offset);
+
             char buff[256];
             int n;
             while ((n = fread(buff, 1, 256, file)) > 0) { // 从file读入sockt
@@ -254,7 +273,12 @@ int DTP(struct request req) { // 这里的路径要直接可以操作
 
             printf("get_file %s\n", req.parameter);
 
-            file = fopen(req.parameter, "wb");
+            if (offset != 0) {
+                file = fopen(req.parameter, "ab");
+            } else {
+                file = fopen(req.parameter, "wb");
+            }
+
             if (file == NULL) {
                 printf("Error fopen(): %s(%d)\n", strerror(errno), errno);
                 pid_signal = 1;
@@ -264,6 +288,22 @@ int DTP(struct request req) { // 这里的路径要直接可以操作
                 close(p_fds[1]);
                 p_fds[1] = -1;
                 exit(1);
+            }
+
+            if (offset != 0) {
+                if (fseek(file, offset, SEEK_SET) !=
+                    0) { // TODO 从开头开始？？？
+                    perror("fseek");
+                    fclose(file);
+                    file = NULL;
+                    pid_signal = 1;
+                    write(p_fds[1], &pid_signal, sizeof(pid_signal));
+                    close(data_socket);
+                    data_socket = -1;
+                    close(p_fds[1]);
+                    p_fds[1] = -1;
+                    exit(1); // TODO
+                }
             }
 
             char buff[256];
@@ -685,6 +725,13 @@ int handle_request(char *msg) {
     printf("** verb: %s\n", req.verb);
     printf("** para: %s\n", req.parameter);
 
+    // reset offset
+    if (strcmp(req.verb, "RETR") != 0 && strcmp(req.verb, "STOR") != 0) {
+        offset = 0;
+    }
+
+    printf("offset: %lld\n", offset);
+
     if (strcmp(req.verb, "QUIT") == 0) {
         if (status == PASV) {
             if (data_listen_socket != -1) {
@@ -980,6 +1027,7 @@ int handle_request(char *msg) {
     } else if (strcmp(req.verb, "RETR") == 0) {
         if (strcmp(req.parameter, "") == 0) {
             send_msg(control_socket, "501 Please provide a parameter.\r\n");
+            offset = 0;
             return 0;
         }
 
@@ -990,6 +1038,7 @@ int handle_request(char *msg) {
             if (ret == 1) {
                 send_msg(control_socket,
                          "451 Paths cannot contain \"../\".\r\n");
+                offset = 0;
                 return 0;
             } else {
 
@@ -997,24 +1046,29 @@ int handle_request(char *msg) {
 
                 if (ret == 0) {
                     printf("in RETR\n");
-                    DTP(req);      // DTP中消息已经处理完
+                    DTP(req); // DTP中消息已经处理完
+                    offset = 0;
                     status = PASS; // 真正用了再expire之前的DTP
                     return 0;
                 } else if (ret == 1) {
                     send_msg(control_socket, "451 This is not a file.\r\n");
+                    offset = 0;
                     return 0;
                 } else {
                     send_msg(control_socket, "550 Path is not available.\r\n");
+                    offset = 0;
                     return 0;
                 }
             }
         } else {
             send_msg(control_socket, "425 Please use PORT or PASV first.\r\n");
+            offset = 0;
             return 0;
         }
     } else if (strcmp(req.verb, "STOR") == 0) {
         if (strcmp(req.parameter, "") == 0) {
             send_msg(control_socket, "501 Please provide a parameter.\r\n");
+            offset = 0;
             return 0;
         }
 
@@ -1025,6 +1079,7 @@ int handle_request(char *msg) {
             if (ret == 1) {
                 send_msg(control_socket,
                          "451 Paths cannot contain \"../\".\r\n");
+                offset = 0;
                 return 0;
             } else {
 
@@ -1041,6 +1096,7 @@ int handle_request(char *msg) {
                          filename); // TODO 检查如果给了个文件目录？？！！！
                 if (strcmp(filename, "") == 0) {
                     send_msg(control_socket, "451 Please provide a file.\r\n");
+                    offset = 0;
                     return 0;
                 }
                 strcpy(filepath, path);
@@ -1062,42 +1118,26 @@ int handle_request(char *msg) {
                     strcpy(req.parameter, real_path); // DTP要看req
 
                     printf("in STOR\n");
-                    DTP(req);      // DTP中消息已经处理完
+                    DTP(req); // DTP中消息已经处理完
+                    offset = 0;
                     status = PASS; // 真正用了再expire之前的DTP
                     return 0;
                 } else if (ret == 1) {
                     send_msg(control_socket, "451 Path is not exist.\r\n");
+                    offset = 0;
                     return 0;
                 } else {
                     send_msg(control_socket, "550 Path is not available.\r\n");
+                    offset = 0;
                     return 0;
                 }
             }
         } else {
             send_msg(control_socket, "425 Please use PORT or PASV first.\r\n");
+            offset = 0;
             return 0;
         }
-
-        if (status == PORT || status == PASV) {
-            // 不需要路经检查，因为STOR只会存储到当前路径
-            // STOR的参数是存储到服务器的路径！！！！！！！！！！！
-            char temp[256];
-            basename(req.parameter, temp);
-            strcpy(req.parameter, temp);
-            printf("filename: %s\n", req.parameter);
-
-            DTP(req);
-            status = PASS;
-            return 0;
-        } else {
-            send_msg(control_socket,
-                     "425 Please use PORT or PASV first.\r\n"); // TODO
-            return 0;
-        }
-
-        status = PASS;
-        return 0;
-    } else if (strcmp(req.verb, "LIST") == 0) { // TODO 路径！！！！
+    } else if (strcmp(req.verb, "LIST") == 0) {
         if (status == PORT || status == PASV) {
 
             if (strcmp(req.parameter, "") == 0) {
@@ -1138,6 +1178,25 @@ int handle_request(char *msg) {
             send_msg(control_socket, "425 Please use PORT or PASV first.\r\n");
             return 0;
         }
+    } else if (strcmp(req.verb, "REST") == 0) {
+        if (strcmp(req.parameter, "") == 0) {
+            send_msg(control_socket, "501 Please provide a parameter.\r\n");
+            return 0;
+        }
+        if (status == PORT || status == PASV) {
+            offset = atoi(req.parameter);
+            if (offset >= 0) {
+                send_msg(control_socket, "350 Restart position accepted.\r\n");
+                return 0;
+            } else {
+                send_msg(control_socket, "501 Invalid parameter.\r\n");
+                return 0;
+            }
+        } else {
+            send_msg(control_socket, "425 Please use PORT or PASV first.\r\n");
+            return 0;
+        }
+
     } else {
         send_msg(control_socket,
                  "502 Unsupport command.\r\n"); // unknown command TODO
