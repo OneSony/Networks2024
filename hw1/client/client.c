@@ -83,6 +83,8 @@ int dtp_pid = -1;
 
 int p_fds[2] = {-1, -1};
 
+long long offset = 0;
+
 int binary_mode;
 
 struct port_mode_info_s port_mode_info;
@@ -365,7 +367,11 @@ int DTP(struct request req) { // TODO 错误处理
             if (file == NULL) { // 如果没有别的地方打开file
                 char filename[256];
                 basename(req.parameter, filename);
-                file = fopen(filename, "wb"); // 保存到当前目录
+                if (offset != 0) {
+                    file = fopen(filename, "ab");
+                } else {
+                    file = fopen(filename, "wb");
+                }
             }
 
             if (file == NULL) {
@@ -375,6 +381,17 @@ int DTP(struct request req) { // TODO 错误处理
                 close(p_fds[0]);
                 p_fds[0] = -1;
                 exit(1);
+            }
+
+            if (offset != 0) {
+                if (fseek(file, offset, SEEK_SET) != 0) {
+                    printf("Error fseek(): %s(%d)\n", strerror(errno), errno);
+                    close(data_socket);
+                    data_socket = -1;
+                    close(p_fds[0]);
+                    p_fds[0] = -1;
+                    exit(1);
+                }
             }
 
             char buff[256];
@@ -419,6 +436,17 @@ int DTP(struct request req) { // TODO 错误处理
                 close(p_fds[0]);
                 p_fds[0] = -1;
                 exit(1);
+            }
+
+            if (offset != 0) {
+                if (fseek(file, offset, SEEK_SET) != 0) {
+                    printf("Error fseek(): %s(%d)\n", strerror(errno), errno);
+                    close(data_socket);
+                    data_socket = -1;
+                    close(p_fds[0]);
+                    p_fds[0] = -1;
+                    exit(1);
+                }
             }
 
             char buff[256];
@@ -691,6 +719,13 @@ int handle_request(char *sentence) {
     // printf("** para: %s\n", req.parameter);
     // printf("** len: %ld\n", strlen(req.parameter));
 
+    // reset offset
+    if (strcmp(req.verb, "RETR") != 0 && strcmp(req.verb, "STOR") != 0) {
+        offset = 0;
+    }
+
+    // printf("offset: %lld\n", offset);
+
     if (strcmp(req.verb, "QUIT") == 0) {
         send_msg(control_socket, sentence);
         get_msg(control_socket, msg);
@@ -810,7 +845,22 @@ int handle_request(char *sentence) {
             DTP(req);
         }
 
+        if (strcmp(req.verb, "RETR") == 0 || strcmp(req.verb, "STOR") == 0) {
+            offset = 0;
+        }
+
         // status = PASS; 这样会导致下次传输的时候不知道用PORT还是PASV
+    } else if (strcmp(req.verb, "REST") == 0) {
+        send_msg(control_socket, sentence);
+        get_msg(control_socket, msg);
+
+        if (msg[0] == '3') {
+            sscanf(req.parameter, "%lld", &offset);
+            printf("Restarting at %lld\n", offset);
+        } else {
+            offset = 0;
+            printf("Restarting fail\n");
+        }
     } else {
         printf("Unsupport command\n");
     }

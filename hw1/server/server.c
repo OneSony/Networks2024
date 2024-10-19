@@ -291,8 +291,7 @@ int DTP(struct request req) { // 这里的路径要直接可以操作
             }
 
             if (offset != 0) {
-                if (fseek(file, offset, SEEK_SET) !=
-                    0) { // TODO 从开头开始？？？
+                if (fseek(file, offset, SEEK_SET) != 0) {
                     perror("fseek");
                     fclose(file);
                     file = NULL;
