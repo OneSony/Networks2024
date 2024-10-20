@@ -82,7 +82,7 @@ int accept_with_timeout(int data_listen_socket) {
                             // (incoming connection)
 
     // Wait for data to be ready or timeout
-    ret = poll(fds, 1, TIMEOUT_MS);
+    ret = poll(fds, 1, TIMEOUT_MS_ACCEPT);
 
     if (ret == -1) {
         // Error during poll
@@ -90,7 +90,8 @@ int accept_with_timeout(int data_listen_socket) {
         return -1;
     } else if (ret == 0) {
         // Timeout occurred
-        printf("Timeout after 1 minute waiting for a connection.\n");
+        printf("Timeout after %d minute waiting for a connection.\n",
+               TIMEOUT_MS_ACCEPT / 60000);
         return -1;
     } else {
         // There is a connection to accept
@@ -104,6 +105,59 @@ int accept_with_timeout(int data_listen_socket) {
     }
 
     return data_socket;
+}
+
+int read_with_timeout(int sockfd, char *sentence) {
+
+    printf("read_with_timeout: %d\n", sockfd);
+
+    struct pollfd fds[1];
+    int ret;
+
+    // Set up the poll structure
+    fds[0].fd = sockfd;
+    fds[0].events = POLLIN; // We are waiting for input (readable data)
+
+    // Poll with a timeout of 1 minute
+    ret = poll(fds, 1, TIMEOUT_MS_READ);
+
+    if (ret == -1) {
+        printf("Error poll(): %s(%d)\n", strerror(errno), errno);
+        return -1;
+    } else if (ret == 0) {
+        // Timeout occurred
+        printf("Timeout after %d minute waiting for get msg.\n",
+               TIMEOUT_MS_READ / 60000);
+        return 0; // Timeout, exit the function， 类似关闭了
+    } else {
+
+        // There is data to read
+
+        int p = 0;
+        while (1) {
+            printf("in\n");
+            int n = read(sockfd, sentence + p, SENTENCE_LEN - p);
+            if (n < 0) {
+                printf("Error read(): %s(%d)\n", strerror(errno), errno);
+                return -1;
+            } else if (n == 0) { // close
+                printf("Error read(): %s(%d)\n", strerror(errno), errno);
+                printf("connection error\n");
+                exit_connection();
+                return 0; // 关闭
+            } else {
+                p += n;
+                printf("p: %d\n", p);
+                printf("%s\n", sentence);
+                if (sentence[p - 2] == '\r' && sentence[p - 1] == '\n') {
+                    sentence[p - 2] = '\0';
+                    break;
+                }
+            }
+        }
+    }
+
+    return 1; // Continue reading
 }
 
 int basename(char *path, char *filename) {
@@ -444,7 +498,7 @@ int DTP(struct request req) { // 这里的路径要直接可以操作
                 printf("Control process: have msg.\n");
                 // get msg
                 char msg[SENTENCE_LEN];
-                get_msg(control_socket, msg);
+                get_msg(control_socket, msg); // 这里有限时也没关系, 因为有poll
 
                 printf("msg: %s\n", msg);
 
@@ -642,34 +696,18 @@ int connect_to(int *sockfd, char *ip, int port) {
 
 int get_msg(int sockfd, char *sentence) {
 
-    int p = 0;
     while (1) {
-        int n = read(sockfd, sentence + p, SENTENCE_LEN - p);
-        if (n < 0) {
-            printf("Error read(): %s(%d)\n", strerror(errno), errno);
+
+        int ret = read_with_timeout(sockfd, sentence);
+
+        if (ret == -1) {
             return -1;
-        } else if (n == 0) { // close
-            printf("Error read(): %s(%d)\n", strerror(errno), errno);
+        } else if (ret == 0) { // 关闭
             printf("connection error\n");
             exit_connection();
             return -1;
         } else {
-            // p += n;
-            // printf("sentence: %s\n", sentence);
-
-            // for (int i = 0; i < n; i++) {
-            //     printf(
-            //         "%02x ",
-            //         (unsigned char)sentence[p + i]); //
-            //         打印每个字节的十六进制值
-            // }
-            // printf("\n");
-
-            p += n;
-            if (sentence[p - 2] == '\r' && sentence[p - 1] == '\n') {
-                sentence[p - 2] = '\0';
-                break;
-            }
+            break;
         }
     }
 

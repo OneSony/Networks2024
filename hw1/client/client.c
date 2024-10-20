@@ -21,7 +21,8 @@
 #define MIN_PORT 20000
 #define MAX_PORT 65535
 #define MAX_RES 100
-#define TIMEOUT_MS 60000
+#define TIMEOUT_MS_READ 60000   // 1 minute
+#define TIMEOUT_MS_ACCEPT 60000 // 1 minute
 
 enum user_status { CONNECTED, USER, PASS, PORT, PASV, RERT, STOR };
 
@@ -96,7 +97,9 @@ FILE *pfile = NULL;
 
 void exit_connection() {
     if (dtp_pid != -1 && kill(dtp_pid, 0) == 0) {
-        kill(dtp_pid, SIGTERM);
+        kill(
+            dtp_pid,
+            SIGTERM); // 这可以，因为仅有的存在子进程的情况已经确保收到SIGTERM会退出
         waitpid(dtp_pid, NULL, 0); // 等待子进程终止
     }
 
@@ -137,7 +140,9 @@ void exit_connection() {
     exit(0);
 }
 
-int read_with_timeout(int sockfd, char *ch) { // 为DTP设计
+int read_with_timeout(int sockfd, char *ch) { // 为DTP设计??
+
+    // RETURN 1: close, TIMEOUT
 
     struct pollfd fds[1];
     int ret;
@@ -147,15 +152,16 @@ int read_with_timeout(int sockfd, char *ch) { // 为DTP设计
     fds[0].events = POLLIN; // We are waiting for input (readable data)
 
     // Poll with a timeout of 1 minute
-    ret = poll(fds, 1, TIMEOUT_MS);
+    ret = poll(fds, 1, TIMEOUT_MS_READ);
 
     if (ret == -1) {
         printf("Error poll(): %s(%d)\n", strerror(errno), errno);
         return -1;
     } else if (ret == 0) {
         // Timeout occurred
-        printf("Timeout after 1 minute waiting for get msg.\n");
-        return -1; // Timeout, exit the function
+        printf("Timeout after %d minute waiting for get msg.\n",
+               TIMEOUT_MS_READ / 60000);
+        return 1; // Timeout, exit the function
     } else {
         int n = read(sockfd, ch, 1);
 
@@ -180,7 +186,7 @@ int accept_with_timeout(int data_listen_socket) {
                             // (incoming connection)
 
     // Wait for data to be ready or timeout
-    ret = poll(fds, 1, TIMEOUT_MS);
+    ret = poll(fds, 1, TIMEOUT_MS_ACCEPT);
 
     if (ret == -1) {
         // Error during poll
@@ -188,7 +194,8 @@ int accept_with_timeout(int data_listen_socket) {
         return -1;
     } else if (ret == 0) {
         // Timeout occurred
-        printf("Timeout after 1 minute waiting for a connection.\n");
+        printf("Timeout after %d minute waiting for a connection.\n",
+               TIMEOUT_MS_ACCEPT / 60000);
         return -1;
     } else {
         // There is a connection to accept
@@ -214,7 +221,7 @@ int basename(char *path, char *filename) {
     return 0;
 }
 
-void handle_abor(int sig) { // 主进程使用
+void handle_abor_main(int sig) { // 主进程使用
 
     if (dtp_pid == -1 || kill(dtp_pid, 0) != 0) { // 没有子进程
         return;
@@ -228,6 +235,8 @@ void handle_abor(int sig) { // 主进程使用
     printf("waiting.\n");
     get_msg(control_socket,
             msg); // TODO 如果超时怎么办，超时了就当对面不能响应！！
+
+    // 只有此时的get_msg是同时存在子进程，并且此时子进程可以收听SIGTERM而直接退出
 
     if (msg[0] == '4') {
         printf("ABOR success\n");
@@ -243,9 +252,65 @@ void handle_abor(int sig) { // 主进程使用
 }
 
 void close_DTP(int sig) {
+    // 安全退出DTP
+    printf("Child process: Received SIGTERM again, exiting...\n");
+
+    if (control_socket != -1) {
+        close(control_socket);
+    }
+
+    if (control_listen_socket != -1) {
+        close(control_listen_socket);
+    }
+
+    if (data_listen_socket != -1) {
+        close(data_listen_socket);
+    }
+
+    if (data_socket != -1) {
+        close(data_socket);
+    }
+
+    if (file != NULL) {
+        fclose(file);
+        file = NULL;
+    }
+
+    if (pfile != NULL) {
+        pclose(pfile);
+        pfile = NULL;
+    }
+
+    if (file != NULL) {
+        fclose(file);
+        file = NULL;
+    }
+
+    if (pfile != NULL) {
+        pclose(pfile);
+        pfile = NULL;
+    }
+
+    if (p_fds[0] != -1) {
+        close(p_fds[0]);
+    }
+
+    if (p_fds[1] != -1) {
+        close(p_fds[1]);
+    }
+
+    printf("Child process: ok\n");
+
+    exit(2);
+}
+
+void handle_abor_DTP(int sig) {
     // 处理 SIGTERM 信号，执行清理操作
 
-    printf("Child process: Received SIGTERM, exiting...\n");
+    // TODO此时更换SIGTERM的响应，如果此时继续收到SIGTERM，就直接安全退出而不等待主进程发送消息
+    signal(SIGTERM, close_DTP);
+
+    printf("Child process: Received SIGTERM, hanging...\n");
 
     // hang up
     // 等待主进程回复
@@ -305,6 +370,7 @@ void close_DTP(int sig) {
     }
 
     printf("back to normal\n");
+    signal(SIGTERM, handle_abor_DTP);
 
     return;
 }
@@ -331,7 +397,7 @@ int DTP(struct request req) { // TODO 错误处理
     dtp_pid = fork();
     if (dtp_pid == 0) {          // 创建DTP
         signal(SIGINT, SIG_IGN); // 停止监听键盘
-        signal(SIGTERM, close_DTP);
+        signal(SIGTERM, handle_abor_DTP);
 
         // 正常传输退出 0
         // 异常退出 1
@@ -506,7 +572,7 @@ int DTP(struct request req) { // TODO 错误处理
         p_fds[0] = -1;
         exit(0);
     } else if (dtp_pid > 0) {
-        signal(SIGINT, handle_abor);
+        signal(SIGINT, handle_abor_main);
 
         close(p_fds[0]); // 关闭读，主进程只需要写
         p_fds[0] = -1;
