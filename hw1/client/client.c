@@ -84,6 +84,7 @@ int dtp_pid = -1;
 int p_fds[2] = {-1, -1};
 
 long long offset = 0;
+long long size = 0;
 
 int binary_mode;
 
@@ -313,11 +314,18 @@ int DTP(struct request req) { // TODO 错误处理
     // 主进程不需要给DTP发消息，DTP自己处理
     // 检查一下是不是真的会退出
 
+    // 返回主进程0成功
+    // 返回主进程1失败
+
+    // 子进程返回2被迫退出
+    // 子进程返回1错误退出
+    // 子进程返回0正常退出
+
     if (pipe(p_fds) == -1) {
         perror("pipe");
         char msg[SENTENCE_LEN];
         get_msg(control_socket, msg); // 等待错误消息
-        return 0;
+        return 1;
     }
 
     dtp_pid = fork();
@@ -515,13 +523,19 @@ int DTP(struct request req) { // TODO 错误处理
 
         if (WEXITSTATUS(pid_signal) == 2) { // 被退出  注意是WEXITSTATUS
             get_msg(control_socket, msg);   // 226 正确ABOR
-        } else {
-            get_msg(control_socket, msg); // 150
+            return 1;
+        } else if (WEXITSTATUS(pid_signal) == 0) { // 正确推出
+            get_msg(control_socket, msg);          // 150
+            return 0;
+        } else { // 错误退出
+            get_msg(control_socket, msg);
+            return 1;
         }
     } else {
         perror("fork");
         char msg[SENTENCE_LEN];
         get_msg(control_socket, msg); // 等待错误消息
+        return 1;
     }
 
     return 0;
@@ -710,8 +724,12 @@ int parse_request(char *msg, struct request *req) {
 // PORT记录
 // RETR STOR LIST通过data listen socket建立data socket，内部已经关闭了data
 // socket和data listen socket
-int handle_request(char *sentence) {
+int handle_request(char *sentence) { // 成功与否还是要返回一下
     // TODO return 0!!!
+    // 成功了返回0
+    // 失败了返回1
+    // 退出-1
+    // TODO 部分指令不检测返回,都可以检测一下
     struct request req;
     char msg[SENTENCE_LEN];
     parse_request(sentence, &req);
@@ -729,7 +747,7 @@ int handle_request(char *sentence) {
     if (strcmp(req.verb, "QUIT") == 0) {
         send_msg(control_socket, sentence);
         get_msg(control_socket, msg);
-        return 1;
+        return -1;
     } else if (strcmp(req.verb, "ABOR") == 0) {
         send_msg(control_socket, sentence);
         get_msg(control_socket, msg);
@@ -778,9 +796,11 @@ int handle_request(char *sentence) {
 
             if (res.code[0] == '2') {
                 status = PORT;
+                return 0;
             } else {
                 close(data_listen_socket);
                 data_listen_socket = -1;
+                return 1;
             }
 
         } else { // 指定了
@@ -802,9 +822,11 @@ int handle_request(char *sentence) {
 
             if (res.code[0] == '2') {
                 status = PORT;
+                return 0;
             } else {
                 close(data_listen_socket);
                 data_listen_socket = -1;
+                return 1;
             }
         }
 
@@ -816,19 +838,19 @@ int handle_request(char *sentence) {
 
         send_msg(control_socket, sentence);
         get_msg(control_socket, msg);
-        if (msg[0] == '2') {
-            struct response res;
-            parse_response(msg, &res);
 
-            if (res.code[0] == '2') {
-                int p1, p2, p3, p4, p5, p6;
-                sscanf(res.message[0], "%*[^0-9]%d,%d,%d,%d,%d,%d%*[^\n]", &p1,
-                       &p2, &p3, &p4, &p5, &p6);
-                sprintf(pasv_mode_info.ip, "%d.%d.%d.%d", p1, p2, p3, p4);
-                pasv_mode_info.port = p5 * 256 + p6;
+        struct response res;
+        parse_response(msg, &res);
 
-                status = PASV;
-            }
+        if (res.code[0] == '2') {
+            int p1, p2, p3, p4, p5, p6;
+            sscanf(res.message[0], "%*[^0-9]%d,%d,%d,%d,%d,%d%*[^\n]", &p1, &p2,
+                   &p3, &p4, &p5, &p6);
+            sprintf(pasv_mode_info.ip, "%d.%d.%d.%d", p1, p2, p3, p4);
+            pasv_mode_info.port = p5 * 256 + p6;
+
+            status = PASV;
+            return 0;
         }
 
     } else if (strcmp(req.verb, "RETR") == 0 || strcmp(req.verb, "STOR") == 0 ||
@@ -839,26 +861,119 @@ int handle_request(char *sentence) {
         get_msg(control_socket, msg);
         struct response res;
         parse_response(msg, &res);
+        int ret = 1;
         if (res.code[0] == '1') { // 可以连接
-            DTP(req);
+            ret = DTP(req);
         }
 
         if (strcmp(req.verb, "RETR") == 0 || strcmp(req.verb, "STOR") == 0) {
             offset = 0;
         }
 
+        return ret;
+
         // status = PASS; 这样会导致下次传输的时候不知道用PORT还是PASV
     } else if (strcmp(req.verb, "REST") == 0) {
         send_msg(control_socket, sentence);
         get_msg(control_socket, msg);
+        struct response res;
+        parse_response(msg, &res);
 
-        if (msg[0] == '3') {
+        if (res.code[0] == '3') {
             sscanf(req.parameter, "%lld", &offset);
             printf("Restarting at %lld\n", offset);
+            return 0;
         } else {
             offset = 0;
             printf("Restarting fail\n");
+            return 1;
         }
+    } else if (strcmp(req.verb, "SIZE") == 0) {
+        send_msg(control_socket, sentence);
+        get_msg(control_socket, msg);
+
+        struct response res;
+        parse_response(msg, &res);
+
+        if (res.code[0] == '2') {
+            struct response res;
+            parse_response(msg, &res);
+            int ret = sscanf(res.message[0], "%*[^0-9]%lld", &size);
+            if (ret != 1) { // 全部都是数字
+                sscanf(res.message[0], "%lld", &size);
+            }
+            printf("msg size: %ld\n", strlen(res.message[0]));
+            printf("msg: '%s'\n", res.message[0]);
+            printf("size: %lld\n", size);
+            return 0;
+        } else {
+            size = 0;
+            return 1;
+        }
+    } else if (strcmp(req.verb, "get") == 0) {
+        // TODO
+        // 先看本地的
+        // PASV
+        // 不行再PORT
+        // REST
+        // RETR
+    } else if (strcmp(req.verb, "put") == 0) { // TODO 错误处理
+        //  SIZE清空？？
+        // TODO参数检查
+
+        char local_path[256];
+        char remote_path[256];
+
+        if (sscanf(req.parameter, "%s %s", local_path, remote_path) != 2) {
+            printf("put error\n");
+            return 1;
+        }
+
+        file = fopen(local_path, "rb");
+
+        if (file == NULL) {
+            printf("Error fopen(): %s(%d)\n", strerror(errno), errno);
+            return 1;
+        }
+
+        int ret;
+
+        char buff[500];
+        sprintf(buff, "SIZE %s\r\n", remote_path);
+        ret = handle_request(buff);
+        if (ret == 1) {
+            printf("SIZE error, back to normal.\n");
+        } else {
+            printf("SIZE success. %lld\n", size);
+        }
+
+        sprintf(buff, "PASV\r\n");
+        ret = handle_request(buff);
+        if (ret == 1) {
+            printf("PASV error.\n");
+            return 1;
+        }
+
+        if (size != 0) {
+            sprintf(buff, "REST %lld\r\n", size);
+            ret = handle_request(buff);
+            if (ret == 1) {
+                printf("REST error, back to normal\n");
+            } else {
+                printf("REST success.\n");
+            }
+        }
+
+        sprintf(buff, "STOR %s\r\n", remote_path); // 里面处理了offset
+        ret = handle_request(buff);
+
+        // TODO
+        // 先SIZE
+        // PASV
+        // 不行再PORT
+        // REST
+        // STOR
+
     } else {
         printf("Unsupport command\n");
     }
@@ -941,7 +1056,7 @@ int main(int argc, char *argv[]) {
         sentence[len + 1] = '\0';
 
         // 进入循环，同时接受responce，直接返回结果是否正确
-        if (1 == handle_request(sentence)) {
+        if (-1 == handle_request(sentence)) {
             break;
         }
 

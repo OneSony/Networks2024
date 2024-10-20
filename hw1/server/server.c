@@ -809,66 +809,74 @@ int handle_request(char *msg) {
         send_msg(control_socket, "215 UNIX Type: L8\r\n");
         return 0;
     } else if (strcmp(req.verb, "TYPE") == 0) {
-        if (strcmp(req.parameter, "") == 0) {
-            send_msg(control_socket, "501 Please provide a parameter.\r\n");
-            return 0;
-        }
+        if (status == PASS || status == PORT || status == PASV) {
+            if (strcmp(req.parameter, "") == 0) {
+                send_msg(control_socket, "501 Please provide a parameter.\r\n");
+                return 0;
+            }
 
-        if (strcmp(req.parameter, "I") == 0) {
-            send_msg(control_socket, "200 Type set to I.\r\n");
-            binary_mode = 1; // on
-            return 0;
-        } else {
-            send_msg(control_socket, "504 Server just support TYPE I.\r\n");
-            return 0;
+            if (strcmp(req.parameter, "I") == 0) {
+                send_msg(control_socket, "200 Type set to I.\r\n");
+                binary_mode = 1; // on
+                return 0;
+            } else {
+                send_msg(control_socket, "504 Server just support TYPE I.\r\n");
+                return 0;
+            }
         }
     } else if (strcmp(req.verb, "SIZE") == 0) {
 
-        if (strcmp(req.parameter, "") == 0) {
-            send_msg(control_socket, "501 Please provide a parameter.\r\n");
-            return 0;
-        }
+        if (status == PASS || status == PORT || status == PASV) {
 
-        int ret = path_check(req.parameter); // 不能包含../
+            if (strcmp(req.parameter, "") == 0) {
+                send_msg(control_socket, "501 Please provide a parameter.\r\n");
+                return 0;
+            }
 
-        if (ret == 1) {
-            send_msg(control_socket, "451 Paths cannot contain \"../\".\r\n");
-            return 0;
-        } else {
+            int ret = path_check(req.parameter); // 不能包含../
 
-            ret = path_convert(req.parameter); // 直接修改吧，因为DTP要看req
+            if (ret == 1) {
+                send_msg(control_socket,
+                         "451 Paths cannot contain \"../\".\r\n");
+                return 0;
+            } else {
 
-            if (ret == 0) {
+                ret = path_convert(req.parameter); // 直接修改吧，因为DTP要看req
 
-                struct stat path_stat;
-                // 使用 stat 函数获取文件状态
-                if (stat(req.parameter, &path_stat) != 0) {
-                    printf("Error stat(): %s(%d)\n", strerror(errno), errno);
-                    send_msg(control_socket,
-                             "500 Internal error.\r\n"); // TODO
+                if (ret == 0) {
+
+                    struct stat path_stat;
+                    // 使用 stat 函数获取文件状态
+                    if (stat(req.parameter, &path_stat) != 0) {
+                        printf("Error stat(): %s(%d)\n", strerror(errno),
+                               errno);
+                        send_msg(control_socket,
+                                 "500 Internal error.\r\n"); // TODO
+                        return 0;
+                    }
+
+                    // 检查路径是否为一个文件
+                    if (!S_ISREG(path_stat.st_mode)) {
+                        printf("Error: %s is not a file\n", req.parameter);
+                        send_msg(control_socket,
+                                 "451 This is not a directory.\r\n");
+                        return 0;
+                    }
+
+                    char buff[256];
+                    sprintf(buff, "213 %ld\r\n", path_stat.st_size);
+                    send_msg(control_socket, buff);
+                    printf("size: %ld\n", path_stat.st_size);
                     return 0;
-                }
 
-                // 检查路径是否为一个文件
-                if (!S_ISREG(path_stat.st_mode)) {
-                    printf("Error: %s is not a file\n", req.parameter);
+                } else if (ret == 1) {
                     send_msg(control_socket,
                              "451 This is not a directory.\r\n");
                     return 0;
+                } else {
+                    send_msg(control_socket, "550 Path is not available.\r\n");
+                    return 0;
                 }
-
-                char buff[256];
-                sprintf(buff, "213 %ld\r\n", path_stat.st_size);
-                send_msg(control_socket, buff);
-                printf("size: %ld\n", path_stat.st_size);
-                return 0;
-
-            } else if (ret == 1) {
-                send_msg(control_socket, "451 This is not a directory.\r\n");
-                return 0;
-            } else {
-                send_msg(control_socket, "550 Path is not available.\r\n");
-                return 0;
             }
         }
 
