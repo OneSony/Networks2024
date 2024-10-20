@@ -301,7 +301,7 @@ int DTP(struct request req) { // 这里的路径要直接可以操作
                     data_socket = -1;
                     close(p_fds[1]);
                     p_fds[1] = -1;
-                    exit(1); // TODO 有必要退出的，因为此时client以为从这里开始
+                    exit(1); // 有必要退出的，因为此时client以为从这里开始
                 }
             }
 
@@ -367,7 +367,7 @@ int DTP(struct request req) { // 这里的路径要直接可以操作
                     data_socket = -1;
                     close(p_fds[1]);
                     p_fds[1] = -1;
-                    exit(1); // TODO
+                    exit(1);
                 }
             }
 
@@ -403,7 +403,7 @@ int DTP(struct request req) { // 这里的路径要直接可以操作
 
             if (strcmp(req.verb, "LIST") == 0) {
                 snprintf(command, sizeof(command), "/bin/ls -l %s",
-                         req.parameter); // TODO 第一行是总大小！！！
+                         req.parameter); // TODO 第一行是总大小
             } else if (strcmp(req.verb, "NLST") == 0) {
                 // snprintf(command, sizeof(command), "find '%s' -maxdepth 1
                 // -type d -not -name '.' -printf '%%f/\\n' -o -type f -printf
@@ -824,7 +824,7 @@ int handle_request(char *msg) {
         return 1;
     } else if (strcmp(req.verb, "ABOR") == 0) {
         if (status == PASS) {
-            send_msg(control_socket, "225 No transfer to abort.\r\n"); // TODO
+            send_msg(control_socket, "225 No transfer to abort.\r\n");
             return 0;
         } else if (status == PASV) {
             if (data_listen_socket != -1) {
@@ -911,8 +911,7 @@ int handle_request(char *msg) {
                     if (stat(req.parameter, &path_stat) != 0) {
                         printf("\033[31m[%d Error]\033[0m stat(): %s(%d)\n",
                                print_pid, strerror(errno), errno);
-                        send_msg(control_socket,
-                                 "500 Internal error.\r\n"); // TODO
+                        send_msg(control_socket, "500 Internal error.\r\n");
                         return 0;
                     }
 
@@ -971,7 +970,7 @@ int handle_request(char *msg) {
                     return 0;
                 } else {
                     send_msg(control_socket,
-                             "550 Fail to change the directory.\r\n"); // TODO
+                             "550 Fail to change the directory.\r\n");
                     return 0;
                 }
             } else {
@@ -1006,28 +1005,38 @@ int handle_request(char *msg) {
                 strcpy(filepath, ".");
             }
 
-            int ret = path_convert(filepath);
-            // printf("path: %s\n", filepath);
+            int ret = path_check(filepath);
 
-            if (ret == 0) { // 没有越界
-                char real_path[256];
-                strcpy(real_path, filepath); // 返回值最后不含/
-                strcat(real_path, "/");
-                strcat(real_path, filename);
-                if (mkdir(real_path, 0777) == 0) {
-                    rewrite_path(path); // 用户输入的path
-                    char buff[400];
-                    sprintf(buff, "257 \"%s\" is created.\r\n", path);
-                    send_msg(control_socket, buff);
-                    return 0;
+            if (ret == 1) {
+                send_msg(control_socket,
+                         "451 Paths cannot contain \"../\".\r\n");
+                offset = 0;
+                return 0;
+            } else {
+
+                ret = path_convert(filepath);
+                // printf("path: %s\n", filepath);
+
+                if (ret == 0) { // 没有越界
+                    char real_path[256];
+                    strcpy(real_path, filepath); // 返回值最后不含/
+                    strcat(real_path, "/");
+                    strcat(real_path, filename);
+                    if (mkdir(real_path, 0777) == 0) {
+                        rewrite_path(path); // 用户输入的path
+                        char buff[400];
+                        sprintf(buff, "257 \"%s\" is created.\r\n", path);
+                        send_msg(control_socket, buff);
+                        return 0;
+                    } else {
+                        send_msg(control_socket,
+                                 "550 Failed to create the directory.\r\n");
+                        return 0;
+                    }
                 } else {
-                    send_msg(control_socket,
-                             "550 Failed to create the directory.\r\n"); // TODO
+                    send_msg(control_socket, "550 Path is not available.\r\n");
                     return 0;
                 }
-            } else {
-                send_msg(control_socket, "550 Path is not available.\r\n");
-                return 0;
             }
         }
     } else if (strcmp(req.verb, "RMD") == 0) {
@@ -1040,20 +1049,30 @@ int handle_request(char *msg) {
             char path[256];
             sscanf(req.parameter, "%s", path);
 
-            int ret = path_convert(path);
+            int ret = path_check(req.parameter);
 
-            if (ret == 0) { // 没有越界
-                if (rmdir(path) == 0) {
-                    send_msg(control_socket, "250 Directory deleted.\r\n");
-                    return 0;
+            if (ret == 1) {
+                send_msg(control_socket,
+                         "451 Paths cannot contain \"../\".\r\n");
+                offset = 0;
+                return 0;
+            } else {
+
+                ret = path_convert(path);
+
+                if (ret == 0) { // 没有越界
+                    if (rmdir(path) == 0) {
+                        send_msg(control_socket, "250 Directory deleted.\r\n");
+                        return 0;
+                    } else {
+                        send_msg(control_socket,
+                                 "550 Failed to remove the directory.\r\n");
+                        return 0;
+                    }
                 } else {
-                    send_msg(control_socket,
-                             "550 Failed to remove the directory.\r\n"); // TODO
+                    send_msg(control_socket, "550 Path is not available.\r\n");
                     return 0;
                 }
-            } else {
-                send_msg(control_socket, "550 Path is not available.\r\n");
-                return 0;
             }
         }
     } else if (strcmp(req.verb, "PORT") == 0) {
@@ -1090,7 +1109,6 @@ int handle_request(char *msg) {
                 data_listen_socket = -1;
             }
 
-            // TODO pasv ip
             // printf("data_port: %d\n", data_listen_socket);
             while (1) { // 随机选一个端口
                 pasv_mode_info.port =
@@ -1240,8 +1258,7 @@ int handle_request(char *msg) {
                 if (stat(req.parameter, &path_stat) != 0) {
                     printf("\033[31m[%d Error]\033[0m stat(): %s(%d)\n",
                            print_pid, strerror(errno), errno);
-                    send_msg(control_socket,
-                             "500 Internal error.\r\n"); // TODO
+                    send_msg(control_socket, "500 Internal error.\r\n");
                     return 0;
                 }
 
@@ -1286,8 +1303,7 @@ int handle_request(char *msg) {
         }
 
     } else {
-        send_msg(control_socket,
-                 "502 Unsupport command.\r\n"); // unknown command TODO
+        send_msg(control_socket, "502 Nonsupport command.\r\n");
         return 0;
     }
 
@@ -1297,7 +1313,7 @@ int handle_request(char *msg) {
     } else if (status == USER) {
         send_msg(control_socket, "530 Please login with PASS.\r\n");
     } else {
-        send_msg(control_socket, "500 retry.\r\n"); // TODO
+        send_msg(control_socket, "500 Please retry.\r\n");
     }
     return 0;
 }

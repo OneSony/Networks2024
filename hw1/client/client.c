@@ -92,7 +92,7 @@ int read_with_timeout(int sockfd, char *ch) { // 为DTP设计??
     } else if (ret == 0) {
         // Timeout occurred
         printf("\033[31m[Error]\033[0m Timeout after %d minute waiting for "
-               "get msg.\n", // TODO
+               "get msg.\n",
                TIMEOUT_MS_READ / 60000);
         return 1; // Timeout, exit the function
     } else {
@@ -103,7 +103,7 @@ int read_with_timeout(int sockfd, char *ch) { // 为DTP设计??
                    errno);
             return -1;
         } else if (n == 0) { // close
-            return 1;        // TODO 真的有意义吗
+            return 1;
         }
     }
 
@@ -171,7 +171,7 @@ void handle_abor_main(int sig) { // 主进程使用
     char msg[SENTENCE_LEN];
     // printf("waiting.\n");
     get_msg(control_socket,
-            msg); // TODO 如果超时怎么办，超时了就当对面不能响应！！
+            msg); // 如果超时怎么办，超时了就当对面不能响应
 
     // 只有此时的get_msg是同时存在子进程，并且此时子进程可以收听SIGTERM而直接退出
 
@@ -244,7 +244,7 @@ void close_DTP(int sig) {
 void handle_abor_DTP(int sig) {
     // 处理 SIGTERM 信号，执行清理操作
 
-    // TODO此时更换SIGTERM的响应，如果此时继续收到SIGTERM，就直接安全退出而不等待主进程发送消息
+    // T此时更换SIGTERM的响应，如果此时继续收到SIGTERM，就直接安全退出而不等待主进程发送消息
     signal(SIGTERM, close_DTP);
 
     printf("\n");
@@ -313,7 +313,7 @@ void handle_abor_DTP(int sig) {
     return;
 }
 
-int DTP(struct request req) { // TODO 错误处理
+int DTP(struct request req) {
     // DTP遇到问题就退出，主进程等server发消息
     // 主进程不需要给DTP发消息，DTP自己处理
     // 检查一下是不是真的会退出
@@ -349,8 +349,7 @@ int DTP(struct request req) { // TODO 错误处理
 
         if (status == PORT) {
 
-            if ((data_socket = accept_with_timeout(data_listen_socket)) ==
-                -1) { // TODO直接结束进程？？
+            if ((data_socket = accept_with_timeout(data_listen_socket)) == -1) {
                 close(data_listen_socket);
                 data_listen_socket = -1;
                 close(p_fds[0]);
@@ -494,13 +493,11 @@ int DTP(struct request req) { // TODO 错误处理
             size_t next_update = total_transferred + update_interval;
             while ((n = fread(buff, 1, 256, file)) > 0) { // 从file读入sockt
 
-                if (write(data_socket, buff, n) == -1) { // TODO 网络断开
+                if (write(data_socket, buff, n) == -1) {
                     fclose(file);
                     file = NULL;
                     printf("\033[31m[Error]\033[0m write(): %s(%d)\n",
-                           strerror(errno),
-                           errno); // TODO
-
+                           strerror(errno), errno);
                     close(data_socket);
                     data_socket = -1;
                     close(p_fds[0]);
@@ -537,7 +534,7 @@ int DTP(struct request req) { // TODO 错误处理
             file = NULL;
 
         } else if (strcmp(req.verb, "LIST") ==
-                   0) { // TODO我怎么知道什么时候结束
+                   0) { // 我怎么知道什么时候结束, 不知道结束符，只能等对方关闭
             char buffer[1024];
             int n;
 
@@ -698,14 +695,14 @@ int get_msg(int sockfd,
         // 检查是不是最后一句
 
         char new_sentence[SENTENCE_LEN];
-        strcpy(new_sentence, sentence + start);
+        memcpy(new_sentence, sentence + start, end - start);
+        // strcpy(new_sentence, sentence + start); 没有加\0
 
         // 执行正则表达式匹配
         reti = regexec(&regex, new_sentence, 0, NULL, 0);
 
-        if (reti == 0) {          // 匹配
-            sentence[end] = '\0'; // 替换最后的\r字符为结束符???
-            // TODO
+        if (reti == 0) {          // 匹配，是结尾
+            sentence[end] = '\0'; // 最后自带换行符
             break;
         } else {
             start = end; // end是下一个要读取进来的位置
@@ -795,11 +792,9 @@ int parse_request(char *msg, struct request *req) {
 // RETR STOR LIST通过data listen socket建立data socket，内部已经关闭了data
 // socket和data listen socket
 int handle_request(char *sentence) { // 成功与否还是要返回一下
-    // TODO return 0!!!
     // 成功了返回0
     // 失败了返回1
     // 退出-1
-    // TODO 部分指令不检测返回,都可以检测一下
     struct request req;
     char msg[SENTENCE_LEN];
     parse_request(sentence, &req);
@@ -851,8 +846,7 @@ int handle_request(char *sentence) { // 成功与否还是要返回一下
             }
 
             int p1, p2, p3, p4;
-            sscanf(port_mode_info.ip, "%d.%d.%d.%d", &p1, &p2, &p3,
-                   &p4); // TODO
+            sscanf(port_mode_info.ip, "%d.%d.%d.%d", &p1, &p2, &p3, &p4);
 
             char buff[256];
             sprintf(buff, "PORT %d,%d,%d,%d,%d,%d\r\n", p1, p2, p3, p4,
@@ -1066,8 +1060,7 @@ int handle_request(char *sentence) { // 成功与否还是要返回一下
             if (ret == 1) {
                 // printf("REST error, back to normal\n");
             } else {
-                printf("\033[33mRestarting at %lld\033[0m\n",
-                       local_size); // TODO
+                printf("\033[33mRestarting at %lld\033[0m\n", local_size);
             }
         }
 
@@ -1076,7 +1069,7 @@ int handle_request(char *sentence) { // 成功与否还是要返回一下
 
         repress_output = 0;
 
-    } else if (strcmp(req.verb, "put") == 0) { // TODO 错误处理
+    } else if (strcmp(req.verb, "put") == 0) {
 
         repress_output = 1;
 
