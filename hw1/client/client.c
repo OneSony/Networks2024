@@ -85,7 +85,9 @@ int dtp_pid = -1;
 int p_fds[2] = {-1, -1};
 
 long long offset = 0;
-long long size = 0;
+long long size = 0; // 慎用，不会刷新
+
+int size_mode = 0; // 不使用进度条
 
 int binary_mode;
 
@@ -471,9 +473,28 @@ int DTP(struct request req) { // TODO 错误处理
             char buff[256];
             int n;
             // printf("retring\n");
+
+            size_t total_transferred = offset;
+            size_t update_interval = 1024 * 500; // 每传输500KB更新一次进度
+            size_t next_update = total_transferred + update_interval;
             while ((n = read(data_socket, buff, 256)) > 0) { // 从socket读入file
-                // sleep(2);
                 fwrite(buff, 1, n, file);
+                total_transferred += n;
+
+                if (total_transferred >= next_update) {
+                    if (size_mode == 0) { // 不使用进度条
+                        printf("\rTransferred: %llu bytes",
+                               total_transferred - offset);
+                        fflush(stdout);
+                        next_update += update_interval; // 更新下一个展示点
+                    } else {
+                        printf("\rTransferred: %llu bytes, %.2f%%",
+                               total_transferred - offset,
+                               (double)total_transferred / size * 100);
+                        fflush(stdout);
+                        next_update += update_interval; // 更新下一个展示点
+                    }
+                }
             }
 
             if (n == -1) {
@@ -486,7 +507,9 @@ int DTP(struct request req) { // TODO 错误处理
                 exit(1);
             }
 
-            printf("retr success\n");
+            fflush(stdout);
+            printf("\rDone, total transferred: %llu bytes\n",
+                   total_transferred - offset);
 
             // pipe可以传输当前传递了多少
 
@@ -498,7 +521,7 @@ int DTP(struct request req) { // TODO 错误处理
             if (file == NULL) { // 如果没有别的地方打开file
                 char filename[256];
                 basename(req.parameter, filename);
-                printf("filename: %s\n", filename);
+                // printf("filename: %s\n", filename);
                 file = fopen(filename, "rb"); // 保存到当前目录
             }
 
@@ -525,8 +548,12 @@ int DTP(struct request req) { // TODO 错误处理
 
             char buff[256];
             int n;
+            size_t total_transferred = offset;
+            size_t update_interval = 1024 * 500; // 每传输500KB更新一次进度
+            size_t next_update = total_transferred + update_interval;
             while ((n = fread(buff, 1, 256, file)) > 0) { // 从file读入sockt
-                if (write(data_socket, buff, n) == -1) {  // TODO 网络断开
+
+                if (write(data_socket, buff, n) == -1) { // TODO 网络断开
                     fclose(file);
                     file = NULL;
                     perror("write");
@@ -539,9 +566,30 @@ int DTP(struct request req) { // TODO 错误处理
                     p_fds[0] = -1;
                     exit(1);
                 }
+
+                total_transferred += n;
+
+                if (total_transferred >= next_update) {
+                    if (size_mode == 0) {
+                        printf("\rTransferred: %llu bytes",
+                               total_transferred - offset);
+                        fflush(stdout);
+                        next_update += update_interval; // 更新下一个展示点
+                    } else {
+                        printf("\rTransferred: %llu bytes, %.2f%%",
+                               total_transferred - offset,
+                               (double)total_transferred / size * 100);
+                        fflush(stdout);
+                        next_update += update_interval; // 更新下一个展示点
+                    }
+                }
             }
 
             // printf("send file success\n");
+            fflush(stdout);
+            printf("\rDone, total transferred: %llu bytes\n",
+                   total_transferred - offset);
+            // fflush(stdout);
 
             fclose(file);
             file = NULL;
@@ -930,6 +978,7 @@ int handle_request(char *sentence) { // 成功与否还是要返回一下
         int ret = 1;
         if (res.code[0] == '1') { // 可以连接
             ret = DTP(req);
+            size_mode = 0; // 默认关闭
         }
 
         if (strcmp(req.verb, "RETR") == 0 || strcmp(req.verb, "STOR") == 0) {
@@ -992,6 +1041,7 @@ int handle_request(char *sentence) { // 成功与否还是要返回一下
 
         struct stat path_stat;
         // 使用 stat 函数获取文件状态
+        // 需要根据本地是否存在文件来决定是否需要ab
         if (stat(local_path, &path_stat) != 0) {
             // 文件不存在时
             printf("Error stat(): %s(%d)\n", strerror(errno), errno);
@@ -1009,8 +1059,8 @@ int handle_request(char *sentence) { // 成功与否还是要返回一下
             if (!S_ISREG(path_stat.st_mode)) {
                 printf("Error: %s is not a file\n", req.parameter);
                 return 1;
-            } else { // 文件存在
-                local_size = path_stat.st_size;
+            } else {                            // 文件存在
+                local_size = path_stat.st_size; // 用来RETR
 
                 file = fopen(local_path, "ab");
 
@@ -1021,11 +1071,19 @@ int handle_request(char *sentence) { // 成功与否还是要返回一下
             }
         }
 
-        // 需要根据本地是否存在文件来决定是否需要ab
-
+        // 尝试获取SIZE，打开进度条
         int ret;
 
         char buff[500];
+
+        sprintf(buff, "SIZE %s\r\n", remote_path);
+        ret = handle_request(buff);
+        if (ret == 1) {
+            printf("SIZE error, back to normal.\n");
+        } else {
+            printf("SIZE success. %lld\n", size);
+            size_mode = 1; // 用来显示进度条
+        }
 
         sprintf(buff, "PASV\r\n");
         ret = handle_request(buff);
@@ -1080,8 +1138,10 @@ int handle_request(char *sentence) { // 成功与否还是要返回一下
         if (ret == 1) {
             printf("SIZE error, back to normal.\n");
         } else {
-            printf("SIZE success. %lld\n", size);
+            printf("SIZE success. %lld\n", size); // 用来RETR
         }
+
+        // put的size是本底的
 
         sprintf(buff, "PASV\r\n");
         ret = handle_request(buff);
@@ -1097,6 +1157,22 @@ int handle_request(char *sentence) { // 成功与否还是要返回一下
                 printf("REST error, back to normal\n");
             } else {
                 printf("REST success.\n");
+            }
+        }
+
+        // 获取local大小
+        struct stat path_stat;
+        if (stat(local_path, &path_stat) != 0) {
+            // 文件不存在时
+            printf("Error stat(): %s(%d)\n", strerror(errno), errno);
+            return 1;
+        } else {
+            if (!S_ISREG(path_stat.st_mode)) {
+                printf("Error: %s is not a file\n", req.parameter);
+                return 1;
+            } else { // 文件存在
+                size = path_stat.st_size;
+                size_mode = 1; // 用来显示进度条
             }
         }
 
