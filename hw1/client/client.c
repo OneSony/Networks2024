@@ -851,7 +851,7 @@ int handle_request(char *sentence) { // 成功与否还是要返回一下
                    &port1, &port2);
 
             if (0 != listen_at(&data_listen_socket, port1 * 256 + port2)) {
-                printf("Error: PORT already in use\n");
+                printf("Error: PORT already in use, please use another.\n");
                 return 0;
             }
 
