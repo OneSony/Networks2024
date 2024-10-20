@@ -1,4 +1,4 @@
-client : client.c
+client : client.c client.h
 	gcc -o client client.c -Wall
 
 clean :

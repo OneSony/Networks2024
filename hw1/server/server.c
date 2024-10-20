@@ -1,10 +1,5 @@
 #include "server.h"
 
-//  control socket: USER PASS QUIT SYST TYPE PORT PASV MKD CWD PWD
-//  data socket: RETR STOR LIST
-
-// TODO 获取本机ip
-
 enum user_status status;
 
 int control_listen_socket = -1;
