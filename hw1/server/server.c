@@ -11,6 +11,8 @@ int binary_mode;
 
 long long offset = 0;
 
+int print_pid; // 区分输出的pid
+
 struct port_mode_info_s port_mode_info;
 struct pasv_mode_info_s pasv_mode_info;
 
@@ -81,19 +83,22 @@ int accept_with_timeout(int data_listen_socket) {
 
     if (ret == -1) {
         // Error during poll
-        printf("Error poll(): %s(%d)\n", strerror(errno), errno);
+        printf("\033[31m[%d Error]\033[0m poll(): %s(%d)\n", print_pid,
+               strerror(errno), errno);
         return -1;
     } else if (ret == 0) {
         // Timeout occurred
-        printf("Timeout after %d minute waiting for a connection.\n",
-               TIMEOUT_MS_ACCEPT / 60000);
+        printf("\033[34m[%d info]\033[0m Timeout after %d minute waiting for a "
+               "connection.\n",
+               print_pid, TIMEOUT_MS_ACCEPT / 60000);
         return -1;
     } else {
         // There is a connection to accept
         if (fds[0].revents & POLLIN) {
             data_socket = accept(data_listen_socket, NULL, NULL);
             if (data_socket == -1) {
-                printf("Error accept(): %s(%d)\n", strerror(errno), errno);
+                printf("\033[31m[%d Error]\033[0m accept(): %s(%d)\n",
+                       print_pid, strerror(errno), errno);
                 return -1;
             }
         }
@@ -103,8 +108,6 @@ int accept_with_timeout(int data_listen_socket) {
 }
 
 int read_with_timeout(int sockfd, char *sentence) {
-
-    printf("read_with_timeout: %d\n", sockfd);
 
     struct pollfd fds[1];
     int ret;
@@ -117,12 +120,14 @@ int read_with_timeout(int sockfd, char *sentence) {
     ret = poll(fds, 1, TIMEOUT_MS_READ);
 
     if (ret == -1) {
-        printf("Error poll(): %s(%d)\n", strerror(errno), errno);
+        printf("\033[31m[%d Error]\033[0m poll(): %s(%d)\n", print_pid,
+               strerror(errno), errno);
         return -1;
     } else if (ret == 0) {
         // Timeout occurred
-        printf("Timeout after %d minute waiting for get msg.\n",
-               TIMEOUT_MS_READ / 60000);
+        printf("\033[34m[%d info]\033[0m Timeout after %d minute waiting for a "
+               "request, about to close\n",
+               print_pid, TIMEOUT_MS_READ / 60000);
         return 0; // Timeout, exit the function， 类似关闭了
     } else {
 
@@ -130,22 +135,25 @@ int read_with_timeout(int sockfd, char *sentence) {
 
         int p = 0;
         while (1) {
-            printf("in\n");
+            // printf("in\n");
             int n = read(sockfd, sentence + p, SENTENCE_LEN - p);
             if (n < 0) {
-                printf("Error read(): %s(%d)\n", strerror(errno), errno);
+                printf("\033[31m[%d Error]\033[0m read(): %s(%d)\n", print_pid,
+                       strerror(errno), errno);
                 return -1;
             } else if (n == 0) { // close
-                printf("Error read(): %s(%d)\n", strerror(errno), errno);
-                printf("connection error\n");
+                printf("\033[31m[%d Error]\033[0m read(): %s(%d)\n", print_pid,
+                       strerror(errno), errno);
+                printf("\033[31m[%d Error]\033[0m Connection lost.\n",
+                       print_pid);
                 exit_connection();
                 return 0; // 关闭
             } else {
                 p += n;
-                printf("p: %d\n", p);
-                printf("%s\n", sentence);
+                // printf("p: %d\n", p);
                 if (sentence[p - 2] == '\r' && sentence[p - 1] == '\n') {
                     sentence[p - 2] = '\0';
+                    // printf("sentence: %s\n", sentence);
                     break;
                 }
             }
@@ -175,16 +183,17 @@ int path_convert(char *path) { // 输入client的路径，输出server中的绝�
         strcpy(server_path, path);
     }
 
-    printf("server_path: %s\n", server_path);
+    // printf("server_path: %s\n", server_path);
 
     char resolved_path[800];
 
     if (realpath(server_path, resolved_path) == NULL) { // 不存在
-        perror("realpath error for root");
+        printf("\033[31m[%d Error]\033[0m realpath error for root: %s (%d)\n",
+               print_pid, strerror(errno), errno);
         return 1;
     }
 
-    printf("resolved_path: %s\n", resolved_path);
+    // printf("resolved_path: %s\n", resolved_path);
 
     if (resolved_path[strlen(resolved_path) - 1] ==
         '/') { // root_directory最后不含"/"
@@ -210,7 +219,7 @@ int DTP(struct request req) { // 这里的路径要直接可以操作
         if (0 !=
             connect_to(&data_socket, port_mode_info.ip, port_mode_info.port)) {
             data_socket = -1;
-            printf("connect_to error\n");
+            // printf("connect_to error\n");
             send_msg(control_socket,
                      "425 no TCP connection was established\r\n");
             status = PASS;
@@ -231,11 +240,12 @@ int DTP(struct request req) { // 这里的路径要直接可以操作
         }
     }
 
-    printf("accept success\n");
+    printf("\033[34m[%d info]\033[0m DTP is created.\n", print_pid);
 
     // int p_fds[2]; //父子进程通讯通道
     if (pipe(p_fds) == -1) {
-        perror("pipe");
+        printf("\033[31m[%d Error]\033[0m pipe: %s (%d)\n", print_pid,
+               strerror(errno), errno);
         send_msg(control_socket, "500 Internal error.\r\n"); // 还在主进程里
 
         close(data_socket);
@@ -244,7 +254,7 @@ int DTP(struct request req) { // 这里的路径要直接可以操作
         return 0;
     }
 
-    printf("pipe success\n");
+    // printf("pipe success\n");
 
     dtp_pid = fork();
     if (dtp_pid == 0) { // 创建DTP
@@ -263,11 +273,13 @@ int DTP(struct request req) { // 这里的路径要直接可以操作
 
         if (strcmp(req.verb, "RETR") == 0) {
 
-            printf("send_file %s\n", req.parameter);
+            printf("\033[34m[%d info]\033[0m Sending: %s\n", print_pid,
+                   req.parameter);
 
             file = fopen(req.parameter, "rb");
             if (file == NULL) {
-                printf("Error fopen(): %s(%d)\n", strerror(errno), errno);
+                printf("\033[31m[%d Error]\033[0m fopen(): %s(%d)\n", print_pid,
+                       strerror(errno), errno);
                 pid_signal = 1;
                 write(p_fds[1], &pid_signal, sizeof(pid_signal));
                 close(data_socket);
@@ -279,7 +291,8 @@ int DTP(struct request req) { // 这里的路径要直接可以操作
 
             if (offset != 0) {
                 if (fseek(file, offset, SEEK_SET) != 0) {
-                    perror("fseek");
+                    printf("\033[31m[%d Error]\033[0m fseek: %s (%d)\n",
+                           print_pid, strerror(errno), errno);
                     fclose(file);
                     file = NULL;
                     pid_signal = 1;
@@ -292,7 +305,7 @@ int DTP(struct request req) { // 这里的路径要直接可以操作
                 }
             }
 
-            printf("RETR offset: %lld\n", offset);
+            // printf("RETR offset: %lld\n", offset);
 
             char buff[256];
             int n;
@@ -301,8 +314,8 @@ int DTP(struct request req) { // 这里的路径要直接可以操作
                 if (write(data_socket, buff, n) == -1) {
                     fclose(file);
                     file = NULL;
-                    perror("write");
-                    printf("Error write(): %s(%d)\n", strerror(errno), errno);
+                    printf("\033[31m[%d Error]\033[0m write(): %s(%d)\n",
+                           print_pid, strerror(errno), errno);
                     pid_signal = 2;
                     write(p_fds[1], &pid_signal, sizeof(pid_signal));
                     close(data_socket);
@@ -313,14 +326,16 @@ int DTP(struct request req) { // 这里的路径要直接可以操作
                 }
             }
 
-            printf("send file success\n");
+            // printf("\033[34m[%d info]\033[0m File transfer completed.\n",
+            // print_pid);
 
             fclose(file);
             file = NULL;
 
         } else if (strcmp(req.verb, "STOR") == 0) {
 
-            printf("get_file %s\n", req.parameter);
+            printf("\033[34m[%d info]\033[0m Getting: %s\n", print_pid,
+                   req.parameter);
 
             if (offset != 0) {
                 file = fopen(req.parameter, "ab");
@@ -329,7 +344,8 @@ int DTP(struct request req) { // 这里的路径要直接可以操作
             }
 
             if (file == NULL) {
-                printf("Error fopen(): %s(%d)\n", strerror(errno), errno);
+                printf("\033[31m[%d Error]\033[0m fopen(): %s(%d)\n", print_pid,
+                       strerror(errno), errno);
                 pid_signal = 1;
                 write(p_fds[1], &pid_signal, sizeof(pid_signal));
                 close(data_socket);
@@ -341,7 +357,8 @@ int DTP(struct request req) { // 这里的路径要直接可以操作
 
             if (offset != 0) {
                 if (fseek(file, offset, SEEK_SET) != 0) {
-                    perror("fseek");
+                    printf("\033[31m[%d Error]\033[0m fseek: %s (%d)\n",
+                           print_pid, strerror(errno), errno);
                     fclose(file);
                     file = NULL;
                     pid_signal = 1;
@@ -363,8 +380,8 @@ int DTP(struct request req) { // 这里的路径要直接可以操作
             if (n == -1) {
                 fclose(file);
                 file = NULL;
-                perror("read");
-                printf("Error read(): %s(%d)\n", strerror(errno), errno);
+                printf("\033[31m[%d Error]\033[0m read(): %s(%d)\n", print_pid,
+                       strerror(errno), errno);
                 pid_signal = 2;
                 write(p_fds[1], &pid_signal, sizeof(pid_signal));
                 close(data_socket);
@@ -396,13 +413,14 @@ int DTP(struct request req) { // 这里的路径要直接可以操作
                          "ls -1F %s | sed 's/\\*\\|@\\|=\\|\\s*$//g'",
                          req.parameter);
             }
-            printf("command: %s\n", command);
+            // printf("command: %s\n", command);
 
             // 打开 ls 命令的输出（只读模式）
             pfile = popen(command, "r");
             if (pfile == NULL) {
                 // 如果命令执行失败
-                perror("popen");
+                printf("\033[31m[%d Error]\033[0m popen(): %s(%d)\n", print_pid,
+                       strerror(errno), errno);
                 pid_signal = 1;
                 write(p_fds[1], &pid_signal, sizeof(pid_signal));
                 close(data_socket);
@@ -432,11 +450,10 @@ int DTP(struct request req) { // 这里的路径要直接可以操作
                 }
 
                 if (send(data_socket, buffer, strlen(buffer), 0) == -1) {
-                    perror("send");
+                    printf("\033[31m[%d Error]\033[0m send(): %s(%d)\n",
+                           print_pid, strerror(errno), errno);
                     pclose(pfile);
                     pfile = NULL;
-                    perror("write");
-                    printf("Error write(): %s(%d)\n", strerror(errno), errno);
                     pid_signal = 2;
                     write(p_fds[1], &pid_signal, sizeof(pid_signal));
                     close(data_socket);
@@ -445,7 +462,7 @@ int DTP(struct request req) { // 这里的路径要直接可以操作
                     p_fds[1] = -1;
                     exit(2);
                 }
-                printf("%s", buffer);
+                // printf("%s", buffer);
             }
 
             // 关闭 ls 输出
@@ -455,7 +472,7 @@ int DTP(struct request req) { // 这里的路径要直接可以操作
 
         close(data_socket);
         data_socket = -1;
-        printf("**end send file success\n");
+        printf("\033[34m[%d info]\033[0m Transfer completed.\n", print_pid);
 
         write(p_fds[1], &pid_signal, sizeof(pid_signal)); // 向管道写入数据
         close(p_fds[1]); // 关闭管道的写入端
@@ -477,37 +494,40 @@ int DTP(struct request req) { // 这里的路径要直接可以操作
         fds[1].fd = p_fds[0];
         fds[1].events = POLLIN; // 监听可读事件
 
-        printf("Control process: Handling commands.\n");
+        // printf("Control process: Handling commands.\n");
 
         while (1) {
             int poll_res = poll(fds, 2, -1); // 无限等待，直到有事件发生
 
             if (poll_res == -1) {
-                perror("poll");
+                printf("\033[31m[%d Error]\033[0m poll(): %s(%d)\n", print_pid,
+                       strerror(errno), errno);
+                send_msg(control_socket, "500 Internal error.\r\n");
+                kill(dtp_pid, SIGTERM);
                 break;
             }
 
             // 检查控制 socket 是否有数据到达
             if (fds[0].revents & POLLIN) {
 
-                printf("Control process: have msg.\n");
-                // get msg
+                // printf("Control process: have msg.\n");
+                //  get msg
                 char msg[SENTENCE_LEN];
                 get_msg(control_socket, msg); // 这里有限时也没关系, 因为有poll
 
-                printf("msg: %s\n", msg);
+                // printf("msg: %s\n", msg);
 
-                printf(":::%d %d %d %d\n", msg[0], msg[1], msg[2], msg[3]);
+                // printf(":::%d %d %d %d\n", msg[0], msg[1], msg[2], msg[3]);
 
                 struct request req;
                 parse_request(msg, &req);
-                printf("** verb: %s\n", req.verb);
-                printf("** para: %s\n", req.parameter);
+                printf("\033[33m[%d GET]\033[0m %s; %s\n", print_pid, req.verb,
+                       req.parameter);
 
                 if (strcmp(req.verb, "ABOR") == 0 ||
                     strcmp(req.verb, "QUIT") == 0) {
                     // 收到 ABOR 命令，终止文件传输
-                    printf("Control process: ABOR command received.\n");
+                    // printf("Control process: ABOR command received.\n");
                     kill(dtp_pid, SIGTERM); // 终止子进程
                     send_msg(control_socket, "426 Transfer aborted.\r\n");
                     waitpid(dtp_pid, NULL, 0); // 等待子进程终止
@@ -545,7 +565,8 @@ int DTP(struct request req) { // 这里的路径要直接可以操作
         p_fds[0] = -1;
         waitpid(dtp_pid, NULL, 0); // 确保子进程已经终止
     } else {                       // 错误
-        perror("fork");
+        printf("\033[31m[%d Error]\033[0m fork(): %s(%d)\n", print_pid,
+               strerror(errno), errno);
         send_msg(control_socket, "500 Internal error.\r\n");
     }
 
@@ -588,18 +609,20 @@ void close_DTP(int sig) {
         close(p_fds[1]);
     }
 
-    printf("Child process: Received SIGTERM, exiting...\n");
+    printf("\033[34m[%d Info]\033[0m DTP: Received SIGTERM, exiting...\n",
+           print_pid);
     exit(0); // 正常退出
 }
 
 int send_msg(int sockfd, char *sentence) {
-    printf("send: %s\n", sentence);
+    printf("\033[35m[%d RE]\033[0m %s", print_pid, sentence);
     int len = strlen(sentence);
     int p = 0;
     while (p < len) {
         int n = write(sockfd, sentence + p, len - p);
         if (n < 0) {
-            printf("Error write(): %s(%d)\n", strerror(errno), errno);
+            printf("\033[31m[%d Error]\033[0m write(): %s(%d)\n", print_pid,
+                   strerror(errno), errno);
             return -1;
         } else {
             p += n;
@@ -642,7 +665,8 @@ int rewrite_path(char *str) {
 
 int get_cwd(char *str) {
     if (getcwd(str, 256) == NULL) {
-        printf("Error getcwd(): %s(%d)\n", strerror(errno), errno);
+        printf("\033[31m[%d Error]\033[0m getcwd(): %s(%d)\n", print_pid,
+               strerror(errno), errno);
         return 1;
     }
 
@@ -651,16 +675,13 @@ int get_cwd(char *str) {
         strcat(str, "/");
     }
 
-    printf("ori cwd: %s\n", str);
+    // printf("ori cwd: %s\n", str);
 
     // remove root_directory
     int len = strlen(root_directory);
-    printf("%d\n", len);
-    printf("root: %s\n", root_directory);
     if (strncmp(str, root_directory, len) == 0) {
         strcpy(str, str + len);
     }
-    printf("cwd str: %s\n", str);
 
     rewrite_path(str);
 
@@ -669,7 +690,8 @@ int get_cwd(char *str) {
 
 int connect_to(int *sockfd, char *ip, int port) {
     if ((*sockfd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)) == -1) {
-        printf("Error socket(): %s(%d)\n", strerror(errno), errno);
+        printf("\033[31m[%d Error]\033[0m socket(): %s(%d)\n", print_pid,
+               strerror(errno), errno);
         return 1;
     }
 
@@ -680,7 +702,8 @@ int connect_to(int *sockfd, char *ip, int port) {
     addr.sin_addr.s_addr = inet_addr(ip);
 
     if (connect(*sockfd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-        printf("Error connect(): %s(%d)\n", strerror(errno), errno);
+        printf("\033[31m[%d Error]\033[0m connect(): %s(%d)\n", print_pid,
+               strerror(errno), errno);
         close(*sockfd);
         *sockfd = -1;
         return 1;
@@ -698,7 +721,7 @@ int get_msg(int sockfd, char *sentence) {
         if (ret == -1) {
             return -1;
         } else if (ret == 0) { // 关闭
-            printf("connection error\n");
+            // 错误在里面已经输出了
             exit_connection();
             return -1;
         } else {
@@ -719,7 +742,8 @@ int path_check(char *path) {
 int listen_at(int *sockfd, int port) {
 
     if ((*sockfd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)) == -1) {
-        printf("Error socket(): %s(%d)\n", strerror(errno), errno);
+        printf("\033[31m[%d Error]\033[0m socket(): %s(%d)\n", print_pid,
+               strerror(errno), errno);
         return 1;
     }
 
@@ -731,12 +755,15 @@ int listen_at(int *sockfd, int port) {
 
     if (bind(*sockfd, (struct sockaddr *)&addr, sizeof(addr)) == -1) {
         if (errno == EADDRINUSE) {
-            printf("Error bind(): Port %d is already in use.\n", port);
+            printf("\033[31m[%d Error]\033[0m bind(): Port %d is already in "
+                   "use.\n",
+                   print_pid, port);
             close(*sockfd);
             *sockfd = -1;
             return 2; // 返回2表示端口已被占用
         } else {
-            printf("Error bind(): %s(%d)\n", strerror(errno), errno);
+            printf("\033[31m[%d Error]\033[0m bind(): %s(%d)\n", print_pid,
+                   strerror(errno), errno);
             close(*sockfd);
             *sockfd = -1;
             return 1; // 返回1表示绑定失败
@@ -744,13 +771,14 @@ int listen_at(int *sockfd, int port) {
     }
 
     if (listen(*sockfd, 5) == -1) {
-        printf("Error listen(): %s(%d)\n", strerror(errno), errno);
+        printf("\033[31m[%d Error]\033[0m listen(): %s(%d)\n", print_pid,
+               strerror(errno), errno);
         close(*sockfd);
         *sockfd = -1;
         return 1;
     }
 
-    printf("listen success %d\n", *sockfd);
+    // printf("listen success %d\n", *sockfd);
 
     return 0;
 }
@@ -775,15 +803,15 @@ int handle_request(char *msg) {
     // return 0 其他消息
     struct request req;
     parse_request(msg, &req);
-    printf("** verb: %s\n", req.verb);
-    printf("** para: %s\n", req.parameter);
+    printf("\033[33m[%d GET]\033[0m %s; %s\n", print_pid, req.verb,
+           req.parameter);
 
     // reset offset
     if (strcmp(req.verb, "RETR") != 0 && strcmp(req.verb, "STOR") != 0) {
         offset = 0;
     }
 
-    printf("offset: %lld\n", offset);
+    // printf("offset: %lld\n", offset);
 
     if (strcmp(req.verb, "QUIT") == 0) {
         if (status == PASV) {
@@ -881,8 +909,8 @@ int handle_request(char *msg) {
                     struct stat path_stat;
                     // 使用 stat 函数获取文件状态
                     if (stat(req.parameter, &path_stat) != 0) {
-                        printf("Error stat(): %s(%d)\n", strerror(errno),
-                               errno);
+                        printf("\033[31m[%d Error]\033[0m stat(): %s(%d)\n",
+                               print_pid, strerror(errno), errno);
                         send_msg(control_socket,
                                  "500 Internal error.\r\n"); // TODO
                         return 0;
@@ -890,7 +918,8 @@ int handle_request(char *msg) {
 
                     // 检查路径是否为一个文件
                     if (!S_ISREG(path_stat.st_mode)) {
-                        printf("Error: %s is not a file\n", req.parameter);
+                        printf("\033[31m[%d Error]\033[0m %s is not a file\n",
+                               print_pid, req.parameter);
                         send_msg(control_socket,
                                  "451 This is not a directory.\r\n");
                         return 0;
@@ -899,7 +928,7 @@ int handle_request(char *msg) {
                     char buff[256];
                     sprintf(buff, "213 %ld\r\n", path_stat.st_size);
                     send_msg(control_socket, buff);
-                    printf("size: %ld\n", path_stat.st_size);
+                    // printf("size: %ld\n", path_stat.st_size);
                     return 0;
 
                 } else if (ret == 1) {
@@ -918,7 +947,7 @@ int handle_request(char *msg) {
             char path[256];
 
             get_cwd(path); // rewrite在这里
-            printf("path: %s\n", path);
+            // printf("path: %s\n", path);
             char buff[400];
             sprintf(buff, "257 \"%s\" is the current directory.\r\n", path);
             send_msg(control_socket, buff);
@@ -958,7 +987,7 @@ int handle_request(char *msg) {
         if (status == PASS || status == PORT || status == PASV) {
             char path[256];
             sscanf(req.parameter, "%s", path);
-            printf("path: %s\n", path);
+            // printf("path: %s\n", path);
 
             if (path[strlen(path) - 1] == '/') { // 去掉最后的/
                 path[strlen(path) - 1] = '\0';
@@ -978,7 +1007,7 @@ int handle_request(char *msg) {
             }
 
             int ret = path_convert(filepath);
-            printf("path: %s\n", filepath);
+            // printf("path: %s\n", filepath);
 
             if (ret == 0) { // 没有越界
                 char real_path[256];
@@ -1062,16 +1091,16 @@ int handle_request(char *msg) {
             }
 
             // TODO pasv ip
-            printf("data_port: %d\n", data_listen_socket);
+            // printf("data_port: %d\n", data_listen_socket);
             while (1) { // 随机选一个端口
                 pasv_mode_info.port =
                     rand() % (MAX_PORT - MIN_PORT + 1) + MIN_PORT;
-                printf("**data_port: %d\n", pasv_mode_info.port);
+                // printf("**data_port: %d\n", pasv_mode_info.port);
                 if (listen_at(&data_listen_socket, pasv_mode_info.port) == 0) {
                     break;
                 }
             }
-            printf("data_port: %d\n", data_listen_socket);
+            // printf("data_port: %d\n", data_listen_socket);
 
             int p1, p2, p3, p4;
             sscanf(pasv_mode_info.ip, "%d.%d.%d.%d", &p1, &p2, &p3, &p4);
@@ -1106,7 +1135,7 @@ int handle_request(char *msg) {
                 ret = path_convert(req.parameter); // 直接修改吧，因为DTP要看req
 
                 if (ret == 0) {
-                    printf("in RETR\n");
+                    // printf("in RETR\n");
                     DTP(req); // DTP中消息已经处理完
                     offset = 0;
                     status = PASS; // 真正用了再expire之前的DTP
@@ -1146,7 +1175,7 @@ int handle_request(char *msg) {
 
                 char path[256];
                 sscanf(req.parameter, "%s", path);
-                printf("path: %s\n", path);
+                // printf("path: %s\n", path);
 
                 // 要先去掉文件的名称，看看之前的目录存不存在，用convert
 
@@ -1167,7 +1196,7 @@ int handle_request(char *msg) {
                 }
 
                 int ret = path_convert(filepath);
-                printf("path: %s\n", filepath);
+                // printf("path: %s\n", filepath);
 
                 if (ret == 0) { // 目录没有越界, 并且存在
                     char real_path[256];
@@ -1177,7 +1206,6 @@ int handle_request(char *msg) {
 
                     strcpy(req.parameter, real_path); // DTP要看req
 
-                    printf("in STOR\n");
                     DTP(req); // DTP中消息已经处理完
                     offset = 0;
                     status = PASS; // 真正用了再expire之前的DTP
@@ -1210,14 +1238,14 @@ int handle_request(char *msg) {
                 // 看看路径是不是一个文件夹
                 struct stat path_stat;
                 if (stat(req.parameter, &path_stat) != 0) {
-                    perror("stat error");
+                    printf("\033[31m[%d Error]\033[0m stat(): %s(%d)\n",
+                           print_pid, strerror(errno), errno);
                     send_msg(control_socket,
                              "500 Internal error.\r\n"); // TODO
                     return 0;
                 }
 
                 if (S_ISDIR(path_stat.st_mode)) {
-                    printf("in LIST\n");
                     DTP(req);      // DTP中消息已经处理完
                     status = PASS; // 真正用了再expire之前的DTP
                     return 0;
@@ -1315,62 +1343,49 @@ int main(int argc, char *argv[]) {
         root_directory[strlen(root_directory) - 1] = '\0';
     }
 
-    printf("port: %d\n", port);
-    printf("root_directory: %s\n", root_directory);
-
     if (chdir(root_directory) != 0) { // 不能用change_dir，因为那个会转换路径
-        printf("Error: cannot change to root directory\n");
+        printf("\033[31m[%d Error]\033[0m Cannot change to root directory\n",
+               print_pid);
         exit(EXIT_FAILURE);
     }
 
     if (0 != listen_at(&control_listen_socket, port)) {
         return 1;
     }
-    printf("listenfd: %d\n", control_listen_socket);
+    // printf("listenfd: %d\n", control_listen_socket);
+
+    printf("\033[32m[Running]\033[0m port: %d\n", port);
+    printf("\033[32m[Running]\033[0m root: %s\n", root_directory);
 
     while (1) {
         // 为新连接开启新的control socket
         if ((control_socket = accept(control_listen_socket, NULL, NULL)) ==
             -1) {
-            printf("Error accept(): %s(%d)\n", strerror(errno), errno);
+            printf("\033[31m[%d Error]\033[0m accept(): %s(%d)\n", print_pid,
+                   strerror(errno), errno);
             continue;
         }
-
-        // struct sockaddr_in local_addr;
-        // socklen_t addr_len = sizeof(local_addr);
-
-        // 获取本机信息
-        // if (getsockname(control_socket, (struct sockaddr *)&local_addr,
-        //                &addr_len) == -1) {
-        //    printf("Error getsockname(): %s(%d)\n", strerror(errno), errno);
-        //}
-
-        // 将 IP 地址转换为字符串
-        // inet_ntop(AF_INET, &local_addr.sin_addr, pasv_mode_info.ip,
-        //          sizeof(pasv_mode_info.ip));
-
-        //// 打印本机的 IP 地址
-        // printf("Local IP: %s\n", pasv_mode_info.ip);
-
-        printf("controlfd: %d\n", control_socket);
 
         int pid = fork();
         if (pid == 0) {
             close(control_listen_socket);
             control_listen_socket = -1;
 
+            print_pid = getpid();
+
             // 子进程
-            printf("controlfd: %d\n", control_socket);
+            // printf("controlfd: %d\n", control_socket);
 
             status = CONNECTED;
             send_msg(control_socket, "220 Anonymous FTP server ready.\r\n");
 
             while (1) {
-                printf("in the loop! status:%d\n", status);
+                printf("\033[34m[%d Info]\033[0m Waiting for next request.\n",
+                       print_pid);
                 char msg[SENTENCE_LEN];
                 get_msg(control_socket, msg);
 
-                printf("msg: %s\n", msg);
+                // printf("msg: %s\n", msg);
 
                 if (handle_request(msg) == 1) {
                     break;
@@ -1384,7 +1399,8 @@ int main(int argc, char *argv[]) {
             close(control_socket); // 记得关！！！
             control_socket = -1;
         } else {
-            perror("fork");
+            printf("\033[31m[%d Error]\033[0m fork(): %s (%d)\n", print_pid,
+                   strerror(errno), errno);
             send_msg(control_socket, "500 Internal error.\r\n");
         }
     }
