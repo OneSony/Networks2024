@@ -809,13 +809,13 @@ int handle_request(char *sentence) { // 成功与否还是要返回一下
 
     // printf("offset: %lld\n", offset);
 
-    if (strcmp(req.verb, "QUIT") == 0) {
+    if (strcmp(req.verb, "QUIT") == 0 || strcmp(req.verb, "ABOR") == 0) {
         send_msg(control_socket, sentence);
         get_msg(control_socket, msg);
         return -1;
-    } else if (strcmp(req.verb, "ABOR") == 0) {
-        send_msg(control_socket, sentence);
-        get_msg(control_socket, msg);
+        //} else if (strcmp(req.verb, "ABOR") == 0) {
+        //    send_msg(control_socket, sentence);
+        //    get_msg(control_socket, msg);
     } else if (strcmp(req.verb, "USER") == 0) {
         send_msg(control_socket, sentence);
         get_msg(control_socket, msg);

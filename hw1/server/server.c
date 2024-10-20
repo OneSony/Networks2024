@@ -813,7 +813,7 @@ int handle_request(char *msg) {
 
     // printf("offset: %lld\n", offset);
 
-    if (strcmp(req.verb, "QUIT") == 0) {
+    if (strcmp(req.verb, "QUIT") == 0 || strcmp(req.verb, "ABOR") == 0) {
         if (status == PASV) {
             if (data_listen_socket != -1) {
                 close(data_listen_socket);
@@ -822,23 +822,23 @@ int handle_request(char *msg) {
         }
         send_msg(control_socket, "221 Goodbye.\r\n");
         return 1;
-    } else if (strcmp(req.verb, "ABOR") == 0) {
-        if (status == PASS) {
-            send_msg(control_socket, "225 No transfer to abort.\r\n");
-            return 0;
-        } else if (status == PASV) {
-            if (data_listen_socket != -1) {
-                close(data_listen_socket);
-                data_listen_socket = -1;
-            }
-            send_msg(control_socket, "225 ABOR command successful.\r\n");
-            status = PASS;
-            return 0;
-        } else if (status == PORT) {
-            send_msg(control_socket, "225 ABOR command successful.\r\n");
-            status = PASS;
-            return 0;
-        }
+        //} else if (strcmp(req.verb, "ABOR") == 0) {
+        //    if (status == PASS) {
+        //        send_msg(control_socket, "225 No transfer to abort.\r\n");
+        //        return 0;
+        //    } else if (status == PASV) {
+        //        if (data_listen_socket != -1) {
+        //            close(data_listen_socket);
+        //            data_listen_socket = -1;
+        //        }
+        //        send_msg(control_socket, "225 ABOR command successful.\r\n");
+        //        status = PASS;
+        //        return 0;
+        //    } else if (status == PORT) {
+        //        send_msg(control_socket, "225 ABOR command successful.\r\n");
+        //        status = PASS;
+        //        return 0;
+        //    }
     } else if (strcmp(req.verb, "USER") == 0) {
         if (strcmp(req.parameter, "") == 0) {
             send_msg(control_socket, "501 Please provide a parameter.\r\n");
