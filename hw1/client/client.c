@@ -529,7 +529,7 @@ int DTP(struct request req) { // TODO 错误处理
 
             // printf("send file success\n");
             fflush(stdout);
-            printf("\r\033[34mDone! Total transferred: %llu bytes\033[0m\n",
+            printf("\r\033[32mDone! Total transferred: %llu bytes\033[0m\n",
                    total_transferred - offset);
             // fflush(stdout);
 
