@@ -88,7 +88,7 @@ int accept_with_timeout(int data_listen_socket) {
         return -1;
     } else if (ret == 0) {
         // Timeout occurred
-        printf("\033[34m[%d info]\033[0m Timeout after %d minute waiting for a "
+        printf("\033[34m[%d Info]\033[0m Timeout after %d minute waiting for a "
                "connection.\n",
                print_pid, TIMEOUT_MS_ACCEPT / 60000);
         return -1;
@@ -125,7 +125,7 @@ int read_with_timeout(int sockfd, char *sentence) {
         return -1;
     } else if (ret == 0) {
         // Timeout occurred
-        printf("\033[34m[%d info]\033[0m Timeout after %d minute waiting for a "
+        printf("\033[34m[%d Info]\033[0m Timeout after %d minute waiting for a "
                "request, about to close\n",
                print_pid, TIMEOUT_MS_READ / 60000);
         return 0; // Timeout, exit the function， 类似关闭了
@@ -240,7 +240,7 @@ int DTP(struct request req) { // 这里的路径要直接可以操作
         }
     }
 
-    printf("\033[34m[%d info]\033[0m DTP is created.\n", print_pid);
+    printf("\033[34m[%d Info]\033[0m DTP is created.\n", print_pid);
 
     // int p_fds[2]; //父子进程通讯通道
     if (pipe(p_fds) == -1) {
@@ -273,7 +273,7 @@ int DTP(struct request req) { // 这里的路径要直接可以操作
 
         if (strcmp(req.verb, "RETR") == 0) {
 
-            printf("\033[34m[%d info]\033[0m Sending: %s\n", print_pid,
+            printf("\033[34m[%d Info]\033[0m Sending: %s\n", print_pid,
                    req.parameter);
 
             file = fopen(req.parameter, "rb");
@@ -326,7 +326,7 @@ int DTP(struct request req) { // 这里的路径要直接可以操作
                 }
             }
 
-            // printf("\033[34m[%d info]\033[0m File transfer completed.\n",
+            // printf("\033[34m[%d Info]\033[0m File transfer completed.\n",
             // print_pid);
 
             fclose(file);
@@ -334,7 +334,7 @@ int DTP(struct request req) { // 这里的路径要直接可以操作
 
         } else if (strcmp(req.verb, "STOR") == 0) {
 
-            printf("\033[34m[%d info]\033[0m Getting: %s\n", print_pid,
+            printf("\033[34m[%d Info]\033[0m Getting: %s\n", print_pid,
                    req.parameter);
 
             if (offset != 0) {
@@ -472,7 +472,7 @@ int DTP(struct request req) { // 这里的路径要直接可以操作
 
         close(data_socket);
         data_socket = -1;
-        printf("\033[34m[%d info]\033[0m Transfer completed.\n", print_pid);
+        printf("\033[34m[%d Info]\033[0m Transfer completed.\n", print_pid);
 
         write(p_fds[1], &pid_signal, sizeof(pid_signal)); // 向管道写入数据
         close(p_fds[1]); // 关闭管道的写入端

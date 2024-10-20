@@ -670,7 +670,7 @@ int get_msg(int sockfd,
             if (ret == -1) {
                 return -1;
             } else if (ret == 1) { // close
-                printf("\031[33mConnection closed by the "
+                printf("\033[31mConnection closed by the "
                        "host.\033[0m\n");
                 exit_connection();
             } else {
