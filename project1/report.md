@@ -1,4 +1,0 @@
-# before writing
-
-通过在server端记录每个消息的到来次序，以及维护一个hash列表，根据收到消息的index来存放消息
-最后按顺序读取消息
