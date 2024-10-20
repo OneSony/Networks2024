@@ -911,6 +911,76 @@ int handle_request(char *sentence) { // 成功与否还是要返回一下
             return 1;
         }
     } else if (strcmp(req.verb, "get") == 0) {
+
+        char local_path[256];
+        char remote_path[256];
+
+        if (sscanf(req.parameter, "%s %s", remote_path, local_path) != 2) {
+            printf("Usage: get <remote_path> <loacal_path>\n");
+            return 1;
+        }
+
+        // 先获取本地文件大小
+
+        long long local_size = 0;
+
+        struct stat path_stat;
+        // 使用 stat 函数获取文件状态
+        if (stat(local_path, &path_stat) != 0) {
+            // 文件不存在时
+            printf("Error stat(): %s(%d)\n", strerror(errno), errno);
+            printf("continue\n");
+
+            local_size = 0;
+
+            file = fopen(local_path, "wb");
+
+            if (file == NULL) {
+                printf("Error fopen(): %s(%d)\n", strerror(errno), errno);
+                return 1;
+            }
+        } else {
+            if (!S_ISREG(path_stat.st_mode)) {
+                printf("Error: %s is not a file\n", req.parameter);
+                return 1;
+            } else { // 文件存在
+                local_size = path_stat.st_size;
+
+                file = fopen(local_path, "ab");
+
+                if (file == NULL) {
+                    printf("Error fopen(): %s(%d)\n", strerror(errno), errno);
+                    return 1;
+                }
+            }
+        }
+
+        // 需要根据本地是否存在文件来决定是否需要ab
+
+        int ret;
+
+        char buff[500];
+
+        sprintf(buff, "PASV\r\n");
+        ret = handle_request(buff);
+        if (ret == 1) {
+            printf("PASV error.\n");
+            return 1;
+        }
+
+        if (local_size != 0) {
+            sprintf(buff, "REST %lld\r\n", local_size);
+            ret = handle_request(buff);
+            if (ret == 1) {
+                printf("REST error, back to normal\n");
+            } else {
+                printf("REST success.\n");
+            }
+        }
+
+        sprintf(buff, "RETR %s\r\n", remote_path); // 里面处理了offset
+        ret = handle_request(buff);
+
         // TODO
         // 先看本地的
         // PASV
@@ -925,7 +995,7 @@ int handle_request(char *sentence) { // 成功与否还是要返回一下
         char remote_path[256];
 
         if (sscanf(req.parameter, "%s %s", local_path, remote_path) != 2) {
-            printf("put error\n");
+            printf("Usage: put <local_path> <remote_path>\n");
             return 1;
         }
 
