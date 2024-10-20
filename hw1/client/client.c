@@ -16,6 +16,8 @@ long long size = 0; // 慎用，不会刷新
 
 int size_mode = 0; // 不使用进度条
 
+int repress_output = 0; // 不抑制输出
+
 int binary_mode;
 
 struct port_mode_info_s port_mode_info;
@@ -84,18 +86,21 @@ int read_with_timeout(int sockfd, char *ch) { // 为DTP设计??
     ret = poll(fds, 1, TIMEOUT_MS_READ);
 
     if (ret == -1) {
-        printf("Error poll(): %s(%d)\n", strerror(errno), errno);
+        printf("\033[31m[Error]\033[0m poll(): %s(%d)\n", strerror(errno),
+               errno);
         return -1;
     } else if (ret == 0) {
         // Timeout occurred
-        printf("Timeout after %d minute waiting for get msg.\n",
+        printf("\033[31m[Error]\033[0m Timeout after %d minute waiting for "
+               "get msg.\n", // TODO
                TIMEOUT_MS_READ / 60000);
         return 1; // Timeout, exit the function
     } else {
         int n = read(sockfd, ch, 1);
 
         if (n < 0) {
-            printf("Error read(): %s(%d)\n", strerror(errno), errno);
+            printf("\033[31m[Error]\033[0m read(): %s(%d)\n", strerror(errno),
+                   errno);
             return -1;
         } else if (n == 0) { // close
             return 1;        // TODO 真的有意义吗
@@ -119,11 +124,13 @@ int accept_with_timeout(int data_listen_socket) {
 
     if (ret == -1) {
         // Error during poll
-        printf("Error poll(): %s(%d)\n", strerror(errno), errno);
+        printf("\033[31m[Error]\033[0m poll(): %s(%d)\n", strerror(errno),
+               errno);
         return -1;
     } else if (ret == 0) {
         // Timeout occurred
-        printf("Timeout after %d minute waiting for a connection.\n",
+        printf("\033[31m[Error]\033[0m Timeout after %d minute waiting for "
+               "a connection.\n",
                TIMEOUT_MS_ACCEPT / 60000);
         return -1;
     } else {
@@ -131,7 +138,8 @@ int accept_with_timeout(int data_listen_socket) {
         if (fds[0].revents & POLLIN) {
             data_socket = accept(data_listen_socket, NULL, NULL);
             if (data_socket == -1) {
-                printf("Error accept(): %s(%d)\n", strerror(errno), errno);
+                printf("\033[31m[Error]\033[0m accept(): %s(%d)\n",
+                       strerror(errno), errno);
                 return -1;
             }
         }
@@ -158,21 +166,21 @@ void handle_abor_main(int sig) { // 主进程使用
 
     kill(dtp_pid, SIGTERM); // 让子进程进入等待
     send_msg(control_socket, "ABOR\r\n");
-    printf("ABOR sent.\n");
+    // printf("ABOR sent.\n");
 
     char msg[SENTENCE_LEN];
-    printf("waiting.\n");
+    // printf("waiting.\n");
     get_msg(control_socket,
             msg); // TODO 如果超时怎么办，超时了就当对面不能响应！！
 
     // 只有此时的get_msg是同时存在子进程，并且此时子进程可以收听SIGTERM而直接退出
 
     if (msg[0] == '4') {
-        printf("ABOR success\n");
+        // printf("ABOR success\n");
         int pid_signal = 0; // 继续执行退出
         write(p_fds[1], &pid_signal, sizeof(pid_signal));
     } else {
-        printf("ABOR fail\n");
+        // printf("ABOR fail\n");
         int pid_signal = 1; // 不退出
         write(p_fds[1], &pid_signal, sizeof(pid_signal));
     }
@@ -182,7 +190,7 @@ void handle_abor_main(int sig) { // 主进程使用
 
 void close_DTP(int sig) {
     // 安全退出DTP
-    printf("Child process: Received SIGTERM again, exiting...\n");
+    // printf("Child process: Received SIGTERM again, exiting...\n");
 
     if (control_socket != -1) {
         close(control_socket);
@@ -228,7 +236,7 @@ void close_DTP(int sig) {
         close(p_fds[1]);
     }
 
-    printf("Child process: ok\n");
+    // printf("Child process: ok\n");
 
     exit(2);
 }
@@ -239,7 +247,8 @@ void handle_abor_DTP(int sig) {
     // TODO此时更换SIGTERM的响应，如果此时继续收到SIGTERM，就直接安全退出而不等待主进程发送消息
     signal(SIGTERM, close_DTP);
 
-    printf("Child process: Received SIGTERM, hanging...\n");
+    printf("\n");
+    // printf("Child process: Received SIGTERM, hanging...\n");
 
     // hang up
     // 等待主进程回复
@@ -293,12 +302,12 @@ void handle_abor_DTP(int sig) {
             close(p_fds[1]);
         }
 
-        printf("Child process: ok\n");
+        // printf("Child process: ok\n");
 
         exit(2);
     }
 
-    printf("back to normal\n");
+    // printf("back to normal\n");
     signal(SIGTERM, handle_abor_DTP);
 
     return;
@@ -317,7 +326,8 @@ int DTP(struct request req) { // TODO 错误处理
     // 子进程返回0正常退出
 
     if (pipe(p_fds) == -1) {
-        perror("pipe");
+        printf("\033[31m[Error]\033[0m pipe(): %s(%d)\n", strerror(errno),
+               errno);
         char msg[SENTENCE_LEN];
         get_msg(control_socket, msg); // 等待错误消息
         return 1;
@@ -354,7 +364,6 @@ int DTP(struct request req) { // TODO 错误处理
         } else if (status == PASV) {
             if (0 != connect_to(&data_socket, pasv_mode_info.ip,
                                 pasv_mode_info.port)) {
-                printf("connect_to error\n");
                 close(p_fds[0]);
                 p_fds[0] = -1;
                 exit(1);
@@ -378,7 +387,8 @@ int DTP(struct request req) { // TODO 错误处理
             }
 
             if (file == NULL) {
-                printf("Error fopen(): %s(%d)\n", strerror(errno), errno);
+                printf("\033[31m[Error]\033[0m fopen(): %s(%d)\n",
+                       strerror(errno), errno);
                 close(data_socket);
                 data_socket = -1;
                 close(p_fds[0]);
@@ -388,7 +398,8 @@ int DTP(struct request req) { // TODO 错误处理
 
             if (offset != 0) {
                 if (fseek(file, offset, SEEK_SET) != 0) {
-                    printf("Error fseek(): %s(%d)\n", strerror(errno), errno);
+                    printf("\033[31m[Error]\033[0m fseek(): %s(%d)\n",
+                           strerror(errno), errno);
                     close(data_socket);
                     data_socket = -1;
                     close(p_fds[0]);
@@ -410,14 +421,15 @@ int DTP(struct request req) { // TODO 错误处理
 
                 if (total_transferred >= next_update) {
                     if (size_mode == 0) { // 不使用进度条
-                        printf("\rTransferred: %llu bytes",
+                        printf("\r\033[34mTransferred: %llu bytes\033[0m",
                                total_transferred - offset);
                         fflush(stdout);
                         next_update += update_interval; // 更新下一个展示点
                     } else {
-                        printf("\rTransferred: %llu bytes, %.2f%%",
-                               total_transferred - offset,
-                               (double)total_transferred / size * 100);
+                        printf(
+                            "\r\033[34mTransferred: %llu bytes, %.2f%%\033[0m",
+                            total_transferred - offset,
+                            (double)total_transferred / size * 100);
                         fflush(stdout);
                         next_update += update_interval; // 更新下一个展示点
                     }
@@ -425,8 +437,8 @@ int DTP(struct request req) { // TODO 错误处理
             }
 
             if (n == -1) {
-                perror("read");
-                printf("Error read(): %s(%d)\n", strerror(errno), errno);
+                printf("\033[31m[Error]\033[0m read(): %s(%d)\n",
+                       strerror(errno), errno);
                 close(data_socket);
                 data_socket = -1;
                 close(p_fds[0]);
@@ -435,7 +447,7 @@ int DTP(struct request req) { // TODO 错误处理
             }
 
             fflush(stdout);
-            printf("\rDone, total transferred: %llu bytes\n",
+            printf("\r\033[32mDone! Total transferred: %llu bytes\033[0m\n",
                    total_transferred - offset);
 
             // pipe可以传输当前传递了多少
@@ -454,7 +466,8 @@ int DTP(struct request req) { // TODO 错误处理
 
             // file = fopen(req.parameter, "rb"); //parameter是server的路径
             if (file == NULL) {
-                printf("Error fopen(): %s(%d)\n", strerror(errno), errno);
+                printf("\033[31m[Error]\033[0m fopen(): %s(%d)\n",
+                       strerror(errno), errno);
                 close(data_socket);
                 data_socket = -1;
                 close(p_fds[0]);
@@ -464,7 +477,8 @@ int DTP(struct request req) { // TODO 错误处理
 
             if (offset != 0) {
                 if (fseek(file, offset, SEEK_SET) != 0) {
-                    printf("Error fseek(): %s(%d)\n", strerror(errno), errno);
+                    printf("\033[31m[Error]\033[0m fseek(): %s(%d)\n",
+                           strerror(errno), errno);
                     close(data_socket);
                     data_socket = -1;
                     close(p_fds[0]);
@@ -483,8 +497,8 @@ int DTP(struct request req) { // TODO 错误处理
                 if (write(data_socket, buff, n) == -1) { // TODO 网络断开
                     fclose(file);
                     file = NULL;
-                    perror("write");
-                    printf("Error write(): %s(%d)\n", strerror(errno),
+                    printf("\033[31m[Error]\033[0m write(): %s(%d)\n",
+                           strerror(errno),
                            errno); // TODO
 
                     close(data_socket);
@@ -498,14 +512,15 @@ int DTP(struct request req) { // TODO 错误处理
 
                 if (total_transferred >= next_update) {
                     if (size_mode == 0) {
-                        printf("\rTransferred: %llu bytes",
+                        printf("\r\033[34mTransferred: %llu bytes\033[0m",
                                total_transferred - offset);
                         fflush(stdout);
                         next_update += update_interval; // 更新下一个展示点
                     } else {
-                        printf("\rTransferred: %llu bytes, %.2f%%",
-                               total_transferred - offset,
-                               (double)total_transferred / size * 100);
+                        printf(
+                            "\r\033[34mTransferred: %llu bytes, %.2f%%\033[0m",
+                            total_transferred - offset,
+                            (double)total_transferred / size * 100);
                         fflush(stdout);
                         next_update += update_interval; // 更新下一个展示点
                     }
@@ -514,7 +529,7 @@ int DTP(struct request req) { // TODO 错误处理
 
             // printf("send file success\n");
             fflush(stdout);
-            printf("\rDone, total transferred: %llu bytes\n",
+            printf("\r\033[34mDone! Total transferred: %llu bytes\033[0m\n",
                    total_transferred - offset);
             // fflush(stdout);
 
@@ -532,7 +547,9 @@ int DTP(struct request req) { // TODO 错误处理
             }
 
             if (n == -1) {
-                perror("recv");
+                // perror("recv");
+                printf("\033[31m[Error]\033[0m recv(): %s(%d)\n",
+                       strerror(errno), errno);
                 close(data_socket);
                 data_socket = -1;
                 close(p_fds[0]);
@@ -573,7 +590,8 @@ int DTP(struct request req) { // TODO 错误处理
             return 1;
         }
     } else {
-        perror("fork");
+        printf("\033[31m[Error]\033[0m fork(): %s(%d)\n", strerror(errno),
+               errno);
         char msg[SENTENCE_LEN];
         get_msg(control_socket, msg); // 等待错误消息
         return 1;
@@ -588,7 +606,8 @@ int send_msg(int sockfd, char *sentence) {
     while (p < len) {
         int n = write(sockfd, sentence + p, len - p);
         if (n < 0) { // close
-            printf("Error write(): %s(%d)\n", strerror(errno), errno);
+            printf("\033[31m[Error]\033[0m write(): %s(%d)\n", strerror(errno),
+                   errno);
             return 1;
         } else {
             p += n;
@@ -599,7 +618,8 @@ int send_msg(int sockfd, char *sentence) {
 
 int connect_to(int *sockfd, char *ip, int port) {
     if ((*sockfd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)) == -1) {
-        printf("Error socket(): %s(%d)\n", strerror(errno), errno);
+        printf("\033[31m[Error]\033[0m socket(): %s(%d)\n", strerror(errno),
+               errno);
         return 1;
     }
 
@@ -610,7 +630,8 @@ int connect_to(int *sockfd, char *ip, int port) {
     addr.sin_addr.s_addr = inet_addr(ip);
 
     if (connect(*sockfd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-        printf("Error connect(): %s(%d)\n", strerror(errno), errno);
+        printf("\033[31m[Error]\033[0m connect(): %s(%d)\n", strerror(errno),
+               errno);
         close(*sockfd);
         *sockfd = -1;
         return 1;
@@ -635,7 +656,7 @@ int get_msg(int sockfd,
     // 编译正则表达式
     reti = regcomp(&regex, last_line_pattern, REG_EXTENDED);
     if (reti) {
-        fprintf(stderr, "Could not compile regex\n");
+        printf("\033[31m[Error]\033[0m Could not compile regex\n");
         return 0;
     }
 
@@ -649,7 +670,8 @@ int get_msg(int sockfd,
             if (ret == -1) {
                 return -1;
             } else if (ret == 1) { // close
-                printf("Connection closed by the host.\n");
+                printf("\031[33mConnection closed by the "
+                       "host.\033[0m\n");
                 exit_connection();
             } else {
                 // printf("%c", ch);
@@ -667,7 +689,7 @@ int get_msg(int sockfd,
 
                 // 确保不会超出 buffer 大小
                 if (end >= SENTENCE_LEN - 1) {
-                    printf("Error: buffer overflow\n");
+                    printf("\033[31m[Error]\033[0m buffer overflow\n");
                     return -1; // 防止溢出
                 }
             }
@@ -689,8 +711,10 @@ int get_msg(int sockfd,
             start = end; // end是下一个要读取进来的位置
         }
     }
-    printf("%s", sentence);
-    fflush(stdout);
+    if (repress_output == 0) {
+        printf("%s", sentence);
+        fflush(stdout);
+    }
     regfree(&regex); // 释放正则表达式
 
     return 0;
@@ -699,7 +723,8 @@ int get_msg(int sockfd,
 int listen_at(int *sockfd, int port) {
 
     if ((*sockfd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)) == -1) {
-        printf("Error socket(): %s(%d)\n", strerror(errno), errno);
+        printf("\033[31m[Error]\033[0m socket(): %s(%d)\n", strerror(errno),
+               errno);
         return 1;
     }
 
@@ -711,12 +736,15 @@ int listen_at(int *sockfd, int port) {
 
     if (bind(*sockfd, (struct sockaddr *)&addr, sizeof(addr)) == -1) {
         if (errno == EADDRINUSE) {
-            printf("Error bind(): Port %d is already in use.\n", port);
+            printf("\033[31m[Error]\033[0m bind(): Port %d is already in "
+                   "use.\n",
+                   port);
             close(*sockfd);
             *sockfd = -1;
             return 2; // 返回2表示端口已被占用
         } else {
-            printf("Error bind(): %s(%d)\n", strerror(errno), errno);
+            printf("\033[31m[Error]\033[0m bind(): %s(%d)\n", strerror(errno),
+                   errno);
             close(*sockfd);
             *sockfd = -1;
             return 1; // 返回1表示绑定失败
@@ -724,7 +752,8 @@ int listen_at(int *sockfd, int port) {
     }
 
     if (listen(*sockfd, 5) == -1) {
-        printf("Error listen(): %s(%d)\n", strerror(errno), errno);
+        printf("\033[31m[Error]\033[0m listen(): %s(%d)\n", strerror(errno),
+               errno);
         close(*sockfd);
         *sockfd = -1;
         return 1;
@@ -851,7 +880,8 @@ int handle_request(char *sentence) { // 成功与否还是要返回一下
                    &port1, &port2);
 
             if (0 != listen_at(&data_listen_socket, port1 * 256 + port2)) {
-                printf("Error: PORT already in use, please use another.\n");
+                printf("\033[31m[Error]\033[0m PORT already in use, please "
+                       "use another.\n");
                 return 0;
             }
 
@@ -923,11 +953,11 @@ int handle_request(char *sentence) { // 成功与否还是要返回一下
 
         if (res.code[0] == '3') {
             sscanf(req.parameter, "%lld", &offset);
-            printf("Restarting at %lld\n", offset);
+            // printf("Restarting at %lld\n", offset);
             return 0;
         } else {
             offset = 0;
-            printf("Restarting fail\n");
+            // printf("Restarting fail\n");
             return 1;
         }
     } else if (strcmp(req.verb, "SIZE") == 0) {
@@ -944,9 +974,9 @@ int handle_request(char *sentence) { // 成功与否还是要返回一下
             if (ret != 1) { // 全部都是数字
                 sscanf(res.message[0], "%lld", &size);
             }
-            printf("msg size: %ld\n", strlen(res.message[0]));
-            printf("msg: '%s'\n", res.message[0]);
-            printf("size: %lld\n", size);
+            // printf("msg size: %ld\n", strlen(res.message[0]));
+            // printf("msg: '%s'\n", res.message[0]);
+            // printf("size: %lld\n", size);
             return 0;
         } else {
             size = 0;
@@ -954,11 +984,15 @@ int handle_request(char *sentence) { // 成功与否还是要返回一下
         }
     } else if (strcmp(req.verb, "get") == 0) {
 
+        repress_output = 1;
+
         char local_path[256];
         char remote_path[256];
 
         if (sscanf(req.parameter, "%s %s", remote_path, local_path) != 2) {
-            printf("Usage: get <remote_path> <loacal_path>\n");
+            printf("\033[33mUsage: get <remote_path> "
+                   "<loacal_path>\033[0m\n");
+            repress_output = 0;
             return 1;
         }
 
@@ -971,20 +1005,24 @@ int handle_request(char *sentence) { // 成功与否还是要返回一下
         // 需要根据本地是否存在文件来决定是否需要ab
         if (stat(local_path, &path_stat) != 0) {
             // 文件不存在时
-            printf("Error stat(): %s(%d)\n", strerror(errno), errno);
-            printf("continue\n");
+            // printf("\033[31m[Error]\033[0m stat(): %s(%d)\n",
+            // strerror(errno), errno); printf("continue\n");
 
             local_size = 0;
 
             file = fopen(local_path, "wb");
 
             if (file == NULL) {
-                printf("Error fopen(): %s(%d)\n", strerror(errno), errno);
+                printf("\033[31m[Error]\033[0m fopen(): %s(%d)\n",
+                       strerror(errno), errno);
+                repress_output = 0;
                 return 1;
             }
         } else {
             if (!S_ISREG(path_stat.st_mode)) {
-                printf("Error: %s is not a file\n", req.parameter);
+                printf("\033[31m[Error]\033[0m %s is not a file\n",
+                       req.parameter);
+                repress_output = 0;
                 return 1;
             } else {                            // 文件存在
                 local_size = path_stat.st_size; // 用来RETR
@@ -992,7 +1030,9 @@ int handle_request(char *sentence) { // 成功与否还是要返回一下
                 file = fopen(local_path, "ab");
 
                 if (file == NULL) {
-                    printf("Error fopen(): %s(%d)\n", strerror(errno), errno);
+                    printf("\033[31m[Error]\033[0m fopen(): %s(%d)\n",
+                           strerror(errno), errno);
+                    repress_output = 0;
                     return 1;
                 }
             }
@@ -1006,16 +1046,17 @@ int handle_request(char *sentence) { // 成功与否还是要返回一下
         sprintf(buff, "SIZE %s\r\n", remote_path);
         ret = handle_request(buff);
         if (ret == 1) {
-            printf("SIZE error, back to normal.\n");
+            // printf("SIZE error, back to normal.\n");
         } else {
-            printf("SIZE success. %lld\n", size);
+            // printf("SIZE success. %lld\n", size);
             size_mode = 1; // 用来显示进度条
         }
 
         sprintf(buff, "PASV\r\n");
         ret = handle_request(buff);
         if (ret == 1) {
-            printf("PASV error.\n");
+            // printf("PASV error.\n");
+            repress_output = 0;
             return 1;
         }
 
@@ -1023,37 +1064,38 @@ int handle_request(char *sentence) { // 成功与否还是要返回一下
             sprintf(buff, "REST %lld\r\n", local_size);
             ret = handle_request(buff);
             if (ret == 1) {
-                printf("REST error, back to normal\n");
+                // printf("REST error, back to normal\n");
             } else {
-                printf("REST success.\n");
+                printf("\033[33mRestarting at %lld\033[0m\n",
+                       local_size); // TODO
             }
         }
 
         sprintf(buff, "RETR %s\r\n", remote_path); // 里面处理了offset
         ret = handle_request(buff);
 
-        // TODO
-        // 先看本地的
-        // PASV
-        // 不行再PORT
-        // REST
-        // RETR
+        repress_output = 0;
+
     } else if (strcmp(req.verb, "put") == 0) { // TODO 错误处理
-        //  SIZE清空？？
-        // TODO参数检查
+
+        repress_output = 1;
 
         char local_path[256];
         char remote_path[256];
 
         if (sscanf(req.parameter, "%s %s", local_path, remote_path) != 2) {
-            printf("Usage: put <local_path> <remote_path>\n");
+            printf("\033[33mUsage: put <local_path> "
+                   "<remote_path>\033[0m\n");
+            repress_output = 0;
             return 1;
         }
 
         file = fopen(local_path, "rb");
 
         if (file == NULL) {
-            printf("Error fopen(): %s(%d)\n", strerror(errno), errno);
+            printf("\033[31m[Error]\033[0m fopen(): %s(%d)\n", strerror(errno),
+                   errno);
+            repress_output = 0;
             return 1;
         }
 
@@ -1063,9 +1105,9 @@ int handle_request(char *sentence) { // 成功与否还是要返回一下
         sprintf(buff, "SIZE %s\r\n", remote_path);
         ret = handle_request(buff);
         if (ret == 1) {
-            printf("SIZE error, back to normal.\n");
+            // printf("SIZE error, back to normal.\n");
         } else {
-            printf("SIZE success. %lld\n", size); // 用来RETR
+            // printf("SIZE success. %lld\n", size); // 用来RETR
         }
 
         // put的size是本底的
@@ -1073,7 +1115,8 @@ int handle_request(char *sentence) { // 成功与否还是要返回一下
         sprintf(buff, "PASV\r\n");
         ret = handle_request(buff);
         if (ret == 1) {
-            printf("PASV error.\n");
+            // printf("PASV error.\n");
+            repress_output = 0;
             return 1;
         }
 
@@ -1081,9 +1124,10 @@ int handle_request(char *sentence) { // 成功与否还是要返回一下
             sprintf(buff, "REST %lld\r\n", size);
             ret = handle_request(buff);
             if (ret == 1) {
-                printf("REST error, back to normal\n");
+                // printf("REST error, back to normal\n");
             } else {
-                printf("REST success.\n");
+                // printf("REST success.\n");
+                printf("\033[33mRestarting at %lld\n\033[0m", size);
             }
         }
 
@@ -1091,11 +1135,15 @@ int handle_request(char *sentence) { // 成功与否还是要返回一下
         struct stat path_stat;
         if (stat(local_path, &path_stat) != 0) {
             // 文件不存在时
-            printf("Error stat(): %s(%d)\n", strerror(errno), errno);
+            printf("\033[31m[Error]\033[0m stat(): %s(%d)\n", strerror(errno),
+                   errno);
+            repress_output = 0;
             return 1;
         } else {
             if (!S_ISREG(path_stat.st_mode)) {
-                printf("Error: %s is not a file\n", req.parameter);
+                printf("\033[31m[Error]\033[0m %s is not a file\n",
+                       req.parameter);
+                repress_output = 0;
                 return 1;
             } else { // 文件存在
                 size = path_stat.st_size;
@@ -1106,15 +1154,10 @@ int handle_request(char *sentence) { // 成功与否还是要返回一下
         sprintf(buff, "STOR %s\r\n", remote_path); // 里面处理了offset
         ret = handle_request(buff);
 
-        // TODO
-        // 先SIZE
-        // PASV
-        // 不行再PORT
-        // REST
-        // STOR
+        repress_output = 0;
 
     } else {
-        printf("Unsupport command\n");
+        printf("\033[31mUnsupport command\033[0m\n");
     }
 
     return 0;
@@ -1156,25 +1199,9 @@ int main(int argc, char *argv[]) {
     // printf("port: %d\n", server_port);
 
     if (0 != connect_to(&control_socket, server_ip, server_port)) {
-        printf("cannot connect to the server\n");
+        // printf("cannot connect to the server\n");
         return 1;
     }
-
-    // 获取本机信息
-    // struct sockaddr_in local_addr;
-    // socklen_t addr_len = sizeof(local_addr);
-    // if (getsockname(control_socket, (struct sockaddr *)&local_addr,
-    // &addr_len) <
-    //    0) {
-    //    printf("Error getsockname(): %s(%d)\n", strerror(errno), errno);
-    //}
-
-    // 将本机 IP 地址转换为字符串
-    // inet_ntop(AF_INET, &local_addr.sin_addr, port_mode_info.ip,
-    //          sizeof(port_mode_info.ip));
-
-    // 打印本机的 IP 地址
-    // printf("Local IP: %s\n", port_mode_info.ip);
 
     // 欢迎信息
     char msg[SENTENCE_LEN];
@@ -1187,7 +1214,7 @@ int main(int argc, char *argv[]) {
         char sentence[SENTENCE_LEN];
 
         // printf("myftp> ");
-        // fflush(stdin);
+
         fgets(sentence, SENTENCE_LEN - 1, stdin);
         int len = strlen(sentence);
         sentence[len - 1] = '\r';
