@@ -38,7 +38,7 @@ ArpCache::periodicCheckArpRequestsAndCacheEntries()
 
   for(auto it = m_cacheEntries.begin(); it != m_cacheEntries.end();) {
     //在调用前已经更新了valid
-    if(it->isValid == false) {
+    if((*it)->isValid == false) {
       it = m_cacheEntries.erase(it);
     }else{
       it++;
@@ -75,13 +75,13 @@ ArpCache::periodicCheckArpRequestsAndCacheEntries()
         arp_hdr arp_request;
         arp_request.arp_hrd = arp_hrd_ethernet;      // Ethernet
         arp_request.arp_pro = 0x0800; // IPv4
-        arp_request.hlen = ETHER_ADDR_LEN;              // MAC 地址长度
-        arp_request.plen = 4;              // IPv4 地址长度
-        arp_request.op = arp_op_request;
-        memcpy(arp_request.sha, iface->addr.data(), ETHER_ADDR_LEN);
-        arp_reply.sip = iface->ip;
-        memcpy(arp_reply.tha, "\xff\xff\xff\xff\xff\xff", ETHER_ADDR_LEN);
-        arp_reply.tip = (*it)->ip;
+        arp_request.arp_hln = ETHER_ADDR_LEN;              // MAC 地址长度
+        arp_request.arp_pln = 4;              // IPv4 地址长度
+        arp_request.arp_op = arp_op_request;
+        memcpy(arp_request.arp_sha, iface->addr.data(), ETHER_ADDR_LEN);
+        arp_request.arp_sip = iface->ip;
+        memcpy(arp_request.arp_tha, "\xff\xff\xff\xff\xff\xff", ETHER_ADDR_LEN);
+        arp_request.arp_tip = (*it)->ip;
 
         Buffer packet_request;
         packet_request.insert(packet_request.end(), (unsigned char*)&eth, (unsigned char*)&eth + sizeof(ethernet_hdr));
@@ -95,7 +95,7 @@ ArpCache::periodicCheckArpRequestsAndCacheEntries()
       }
     }else{
       //如果插入到表格里面了，那么就要发送所有的packet
-      for(auto packet_it = (*it)->packets.begin(); it2 != (*it)->packets.end(); packet_it++) {
+      for(auto packet_it = (*it)->packets.begin(); packet_it != (*it)->packets.end(); packet_it++) {
         //发送packet
         Buffer packet = packet_it->packet;
         std::string iface = packet_it->iface;

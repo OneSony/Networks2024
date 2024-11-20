@@ -71,7 +71,7 @@ SimpleRouter::handlePacket(const Buffer& packet, const std::string& inIface)
   std::cerr << "Got packet of size " << packet.size() << " on interface " << inIface << std::endl;
 
 
-  const ethernet_hdr *hdr = reinterpret_cast<const ethernet_hdr*>(packet);
+  const ethernet_hdr *hdr = reinterpret_cast<const ethernet_hdr*>(packet.data());
 
   const Interface* iface = findIfaceByName(inIface);
   if (iface == nullptr) {
@@ -85,7 +85,7 @@ SimpleRouter::handlePacket(const Buffer& packet, const std::string& inIface)
   // handle ARP
   if (hdr->ether_type == ethertype_arp) {
     std::cerr << "Received ARP packet" << std::endl;
-    const arp_hdr *arp = reinterpret_cast<const arp_hdr*>(packet + sizeof(ethernet_hdr));
+    const arp_hdr *arp = reinterpret_cast<const arp_hdr*>(packet.data() + sizeof(ethernet_hdr));
     
 
     if(arp->arp_op == arp_op_request){
@@ -102,13 +102,13 @@ SimpleRouter::handlePacket(const Buffer& packet, const std::string& inIface)
         arp_hdr arp_reply;
         arp_reply.arp_hrd = arp_hrd_ethernet;      // Ethernet
         arp_reply.arp_pro = 0x0800; // IPv4
-        arp_reply.hlen = ETHER_ADDR_LEN;              // MAC 地址长度
-        arp_reply.plen = 4;              // IPv4 地址长度
-        arp_reply.op = arp_op_reply;
-        memcpy(arp_reply.sha, iface->addr.data(), ETHER_ADDR_LEN);
-        arp_reply.sip = iface->ip;
-        memcpy(arp_reply.tha, arp->sha, ETHER_ADDR_LEN);
-        arp_reply.tip = arp->arp_sip;
+        arp_reply.arp_hln = ETHER_ADDR_LEN;              // MAC 地址长度
+        arp_reply.arp_pln = 4;              // IPv4 地址长度
+        arp_reply.arp_op = arp_op_reply;
+        memcpy(arp_reply.arp_sha, iface->addr.data(), ETHER_ADDR_LEN);
+        arp_reply.arp_sip = iface->ip;
+        memcpy(arp_reply.arp_tha, arp->arp_sha, ETHER_ADDR_LEN);
+        arp_reply.arp_tip = arp->arp_sip;
 
         Buffer packet_reply;
         packet_reply.insert(packet_reply.end(), (unsigned char*)&eth_reply, (unsigned char*)&eth_reply + sizeof(ethernet_hdr));
@@ -128,7 +128,7 @@ SimpleRouter::handlePacket(const Buffer& packet, const std::string& inIface)
       if(arp->arp_tip == iface->ip && std::memcmp(hdr->ether_dhost, iface->addr.data(), ETHER_ADDR_LEN) == 0){
         Buffer mac_vector(ETHER_ADDR_LEN);
         std::memcpy(mac_vector.data(), arp->arp_sha, ETHER_ADDR_LEN);
-        m_arp->insertArpEntry(mac_vector, arp->arp_sip);
+        m_arp.insertArpEntry(mac_vector, arp->arp_sip);
       }else{
         std::cerr << "unknown ARP reply format" << std::endl;
         // do nothing
@@ -140,7 +140,7 @@ SimpleRouter::handlePacket(const Buffer& packet, const std::string& inIface)
   //handle IP
   }else if (hdr->ether_type == ethertype_ip) {
     std::cerr << "Received IP packet" << std::endl;
-    const ip_hdr *ip = reinterpret_cast<const ip_hdr*>(packet + sizeof(ethernet_hdr));
+    const ip_hdr *ip = reinterpret_cast<const ip_hdr*>(packet.data() + sizeof(ethernet_hdr));
 
 
     // meets minimum length & checksum
@@ -148,7 +148,7 @@ SimpleRouter::handlePacket(const Buffer& packet, const std::string& inIface)
       std::cerr << "IP packet length is too short" << std::endl;
       return;
     }
-    if(!varify_checksum(ip)){
+    if(!verify_checksum(ip)){
       std::cerr << "Checksum is incorrect" << std::endl;
       return;
     }
@@ -181,11 +181,11 @@ forwarding logic.
       update_checksum(&ip_forward);
 
       RoutingTableEntry next_hop = m_routingTable.lookup(ip->ip_dst);
-      std::shared_ptr<ArpEntry> next_hop_ha = m_arp->lookup(next_hop.gw);
+      std::shared_ptr<ArpEntry> next_hop_ha = m_arp.lookup(next_hop.gw);
 
       if(next_hop_ha == nullptr){
         //缓存
-        m_arp->queueRequest(next_hop.gw, packet, next_hop.ifName);
+        m_arp.queueRequest(next_hop.gw, packet, next_hop.ifName);
       }else{
         //直接转发
         ethernet_hdr eth_forward;
