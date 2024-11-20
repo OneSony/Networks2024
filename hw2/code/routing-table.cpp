@@ -33,8 +33,39 @@ RoutingTable::lookup(uint32_t ip) const
 {
 
   // FILL THIS IN
+  int longest = 0;
+  RoutingTableEntry longest_entry;
 
-  throw std::runtime_error("Routing entry not found");
+  for(auto it = m_entries.begin(); it != m_entries.end(); it++)
+  {
+
+    //max prefix match
+    if((ip & it->mask) == (it->dest & it->mask)) //前缀匹配
+    {
+      //计算当前前缀长度
+      int length = 0;
+      int mask=it->mask;
+      while (mask) {
+        length++;
+        mask <<= 1;
+      }
+
+      if(length > longest)
+      {
+        longest = length;
+        longest_entry = *it;
+      }
+    }
+
+  }
+
+  if(longest != 0)
+  {
+    return longest_entry;
+  }
+  else{
+    throw std::runtime_error("Routing entry not found");
+  }
 }
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////

@@ -80,6 +80,8 @@
         "wait.h": "c",
         "inet.h": "c",
         "server.h": "c",
-        "signal.h": "c"
+        "signal.h": "c",
+        "strstream": "cpp",
+        "variant": "cpp"
     }
 }

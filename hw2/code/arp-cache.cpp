@@ -33,6 +33,78 @@ ArpCache::periodicCheckArpRequestsAndCacheEntries()
 
   // FILL THIS IN
 
+  //TODO 调用函数remove
+  //TODO 重发packet在router里面做？
+
+  for(auto it = m_cacheEntries.begin(); it != m_cacheEntries.end();) {
+    //在调用前已经更新了valid
+    if(it->isValid == false) {
+      it = m_cacheEntries.erase(it);
+    }else{
+      it++;
+    }
+  }
+
+  for(auto it = m_arpRequests.begin(); it != m_arpRequests.end();) {
+    //看看现在这个有没有插入到表格里面，router收到了之后会直接插入
+
+    if(lookup((*it)->ip) == nullptr) {
+      //如果没有插入到表格里面，那么就要继续发送ARP请求
+      if((*it)->nTimesSent >= 5) {
+        //如果发送了5次了，那么就要发送ICMP host unreachable
+        for(auto packet_it = (*it)->packets.begin(); packet_it != (*it)->packets.end(); packet_it++) {
+          //发送ICMP host unreachable
+          Buffer packet = packet_it->packet;
+          std::string iface = packet_it->iface;
+          //TODO
+          //m_router.sendPacket(packet, iface);
+        }
+        //删除这个请求
+        it = m_arpRequests.erase(it);
+      }else{
+        //继续发送ARP请求
+
+        auto iface = m_router.findIfaceByName((*it)->packets.front().iface); //TODO!!!!
+
+        ethernet_hdr eth;
+        memcpy(eth.ether_dhost, "\xff\xff\xff\xff\xff\xff", ETHER_ADDR_LEN);
+        memcpy(eth.ether_shost, iface->addr.data(), ETHER_ADDR_LEN);
+
+        eth.ether_type = ethertype_arp;
+
+        arp_hdr arp_request;
+        arp_request.arp_hrd = arp_hrd_ethernet;      // Ethernet
+        arp_request.arp_pro = 0x0800; // IPv4
+        arp_request.hlen = ETHER_ADDR_LEN;              // MAC 地址长度
+        arp_request.plen = 4;              // IPv4 地址长度
+        arp_request.op = arp_op_request;
+        memcpy(arp_request.sha, iface->addr.data(), ETHER_ADDR_LEN);
+        arp_reply.sip = iface->ip;
+        memcpy(arp_reply.tha, "\xff\xff\xff\xff\xff\xff", ETHER_ADDR_LEN);
+        arp_reply.tip = (*it)->ip;
+
+        Buffer packet_request;
+        packet_request.insert(packet_request.end(), (unsigned char*)&eth, (unsigned char*)&eth + sizeof(ethernet_hdr));
+        packet_request.insert(packet_request.end(), (unsigned char*)&arp_request, (unsigned char*)&arp_request + sizeof(arp_hdr));
+
+        m_router.sendPacket(packet_request, iface->name);
+
+        (*it)->timeSent = steady_clock::now();
+        (*it)->nTimesSent++;
+        it++;
+      }
+    }else{
+      //如果插入到表格里面了，那么就要发送所有的packet
+      for(auto packet_it = (*it)->packets.begin(); it2 != (*it)->packets.end(); packet_it++) {
+        //发送packet
+        Buffer packet = packet_it->packet;
+        std::string iface = packet_it->iface;
+        m_router.sendPacket(packet, iface);
+      }
+      it = m_arpRequests.erase(it);
+    }
+  }
+
 }
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
