@@ -73,22 +73,27 @@ SimpleRouter::handlePacket(const Buffer& packet, const std::string& inIface)
 
   const ethernet_hdr *hdr = reinterpret_cast<const ethernet_hdr*>(packet.data());
 
+
+  // to me?
+  //TODO
+  
   const Interface* iface = findIfaceByName(inIface);
+  
+  print_hdr_eth(packet.data());
+
   if (iface == nullptr) {
     std::cerr << "Received packet, but interface is unknown, ignoring" << std::endl;
-    return;
-  }else if(std::memcmp(hdr->ether_dhost, iface->addr.data(), ETHER_ADDR_LEN) != 0 && std::memcmp(hdr->ether_dhost, "\xff\xff\xff\xff\xff\xff", ETHER_ADDR_LEN) != 0){
-    std::cerr << "Received packet, but not to this host, ignoring" << std::endl;
     return;
   }
 
   // handle ARP
-  if (hdr->ether_type == ethertype_arp) {
+  if (ntohs(hdr->ether_type) == ethertype_arp) {
     std::cerr << "Received ARP packet" << std::endl;
     const arp_hdr *arp = reinterpret_cast<const arp_hdr*>(packet.data() + sizeof(ethernet_hdr));
     
+    print_hdr_arp(packet.data()+sizeof(ethernet_hdr));
 
-    if(arp->arp_op == arp_op_request){
+    if(ntohs(arp->arp_op) == arp_op_request){
       std::cerr << "Received ARP request" << std::endl;
 
       if(arp->arp_tip == iface->ip && std::memcmp(hdr->ether_dhost, "\xff\xff\xff\xff\xff\xff", ETHER_ADDR_LEN) == 0){
@@ -97,24 +102,31 @@ SimpleRouter::handlePacket(const Buffer& packet, const std::string& inIface)
         ethernet_hdr eth_reply;
         memcpy(eth_reply.ether_dhost, arp->arp_sha, ETHER_ADDR_LEN);
         memcpy(eth_reply.ether_shost, iface->addr.data(), ETHER_ADDR_LEN);
-        eth_reply.ether_type = ethertype_arp;
+        eth_reply.ether_type = htons(ethertype_arp);
+
+        std::cerr << "ARP reply ETH" << std::endl;
+        print_hdr_eth((unsigned char*)&eth_reply);
 
         arp_hdr arp_reply;
-        arp_reply.arp_hrd = arp_hrd_ethernet;      // Ethernet
-        arp_reply.arp_pro = 0x0800; // IPv4
+        arp_reply.arp_hrd = htons(arp_hrd_ethernet);      // Ethernet
+        arp_reply.arp_pro = htons(0x0800); // IPv4
         arp_reply.arp_hln = ETHER_ADDR_LEN;              // MAC 地址长度
         arp_reply.arp_pln = 4;              // IPv4 地址长度
-        arp_reply.arp_op = arp_op_reply;
+        arp_reply.arp_op = htons(arp_op_reply);
         memcpy(arp_reply.arp_sha, iface->addr.data(), ETHER_ADDR_LEN);
         arp_reply.arp_sip = iface->ip;
         memcpy(arp_reply.arp_tha, arp->arp_sha, ETHER_ADDR_LEN);
         arp_reply.arp_tip = arp->arp_sip;
+
+        std::cerr << "ARP reply" << std::endl;
+        print_hdr_arp((unsigned char*)&arp_reply);
 
         Buffer packet_reply;
         packet_reply.insert(packet_reply.end(), (unsigned char*)&eth_reply, (unsigned char*)&eth_reply + sizeof(ethernet_hdr));
         packet_reply.insert(packet_reply.end(), (unsigned char*)&arp_reply, (unsigned char*)&arp_reply + sizeof(arp_hdr));
 
         sendPacket(packet_reply, inIface); //TODO??
+        
 
       }else{
         std::cerr << "ARP request for another host" << std::endl;
@@ -122,7 +134,7 @@ SimpleRouter::handlePacket(const Buffer& packet, const std::string& inIface)
       }
 
 
-    }else if(arp->arp_op == arp_op_reply){
+    }else if(ntohs(arp->arp_op) == arp_op_reply){
       std::cerr << "Received ARP reply" << std::endl;
 
       if(arp->arp_tip == iface->ip && std::memcmp(hdr->ether_dhost, iface->addr.data(), ETHER_ADDR_LEN) == 0){
@@ -134,17 +146,21 @@ SimpleRouter::handlePacket(const Buffer& packet, const std::string& inIface)
         // do nothing
       }
 
+    }else{
+      std::cerr << "unknown ARP format" << std::endl;
     }
 
 
   //handle IP
-  }else if (hdr->ether_type == ethertype_ip) {
+  }else if (ntohs(hdr->ether_type) == ethertype_ip) {
     std::cerr << "Received IP packet" << std::endl;
     const ip_hdr *ip = reinterpret_cast<const ip_hdr*>(packet.data() + sizeof(ethernet_hdr));
 
+    print_hdr_ip(packet.data()+sizeof(ethernet_hdr));
+
 
     // meets minimum length & checksum
-    if(ip->ip_len < sizeof(ip_hdr)){
+    if(ntohs(ip->ip_len) < sizeof(ip_hdr)){
       std::cerr << "IP packet length is too short" << std::endl;
       return;
     }
@@ -157,6 +173,8 @@ SimpleRouter::handlePacket(const Buffer& packet, const std::string& inIface)
       std::cerr << "TTL is 0" << std::endl;
       return;
     }
+
+    std::cerr << "IP is correct" << std::endl;
 
     // 判断是否是到本机
     if(ip->ip_dst == iface->ip){
@@ -175,27 +193,46 @@ forwarding logic.
 */
 
     }else{
-      //forward
+
+      std::cerr<<"Forwarding packet"<<std::endl;
+
       ip_hdr ip_forward = *ip;
       ip_forward.ip_ttl -= 1;
       update_checksum(&ip_forward);
 
       RoutingTableEntry next_hop = m_routingTable.lookup(ip->ip_dst);
-      std::shared_ptr<ArpEntry> next_hop_ha = m_arp.lookup(next_hop.gw);
+      printf("next_hop: %s\n", ipToString(next_hop.gw).c_str());
+
+      auto next_hop_ha = m_arp.lookup(next_hop.gw);
 
       if(next_hop_ha == nullptr){
+
+        std::cerr << "ARP not found" << std::endl;
         //缓存
-        m_arp.queueRequest(next_hop.gw, packet, next_hop.ifName);
-      }else{
-        //直接转发
         ethernet_hdr eth_forward;
-        memcpy(eth_forward.ether_dhost, next_hop_ha->mac.data(), ETHER_ADDR_LEN);
+        //memcpy(eth_forward.ether_dhost, next_hop_ha->mac.data(), ETHER_ADDR_LEN);
         memcpy(eth_forward.ether_shost, iface->addr.data(), ETHER_ADDR_LEN);
-        eth_forward.ether_type = ethertype_ip;
+        eth_forward.ether_type = htons(ethertype_ip);
 
         Buffer packet_forward;
         packet_forward.insert(packet_forward.end(), (unsigned char*)&eth_forward, (unsigned char*)&eth_forward + sizeof(ethernet_hdr));
         packet_forward.insert(packet_forward.end(), (unsigned char*)&ip_forward, (unsigned char*)&ip_forward + sizeof(ip_hdr));
+        std::cerr << "ARP request ok" << std::endl;
+        m_arp.queueRequest(next_hop.gw, packet_forward, next_hop.ifName);
+      }else{
+        //直接转发
+
+        std::cerr << "ARP found" << std::endl;
+
+        ethernet_hdr eth_forward;
+        memcpy(eth_forward.ether_dhost, next_hop_ha->mac.data(), ETHER_ADDR_LEN);
+        memcpy(eth_forward.ether_shost, iface->addr.data(), ETHER_ADDR_LEN);
+        eth_forward.ether_type = htons(ethertype_ip);
+
+        Buffer packet_forward;
+        packet_forward.insert(packet_forward.end(), (unsigned char*)&eth_forward, (unsigned char*)&eth_forward + sizeof(ethernet_hdr));
+        packet_forward.insert(packet_forward.end(), (unsigned char*)&ip_forward, (unsigned char*)&ip_forward + sizeof(ip_hdr));
+
 
         sendPacket(packet_forward, inIface);
       }
