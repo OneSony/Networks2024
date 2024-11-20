@@ -140,7 +140,19 @@ SimpleRouter::handlePacket(const Buffer& packet, const std::string& inIface)
       if(arp->arp_tip == iface->ip && std::memcmp(hdr->ether_dhost, iface->addr.data(), ETHER_ADDR_LEN) == 0){
         Buffer mac_vector(ETHER_ADDR_LEN);
         std::memcpy(mac_vector.data(), arp->arp_sha, ETHER_ADDR_LEN);
-        m_arp.insertArpEntry(mac_vector, arp->arp_sip);
+        auto arp_requests = m_arp.insertArpEntry(mac_vector, arp->arp_sip);
+
+        for(auto packet_it = arp_requests->packets.begin(); packet_it != arp_requests->packets.end(); packet_it++) {
+          //发送packet
+          Buffer packet = packet_it->packet;
+          ethernet_hdr* eth = reinterpret_cast<ethernet_hdr*>(packet.data());
+          memcpy(eth->ether_dhost, mac_vector.data(), ETHER_ADDR_LEN);
+
+          std::string iface = packet_it->iface;
+          m_router.sendPacket(packet, iface);
+        }
+        m_arp.removeRequest(arp_request);
+
       }else{
         std::cerr << "unknown ARP reply format" << std::endl;
         // do nothing
