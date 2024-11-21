@@ -105,6 +105,10 @@ public:
   const Interface*
   findIfaceByName(const std::string& name) const;
 
+  // packet需要包括所有的层, 但目的mac可以不写
+  void
+  forwardPacket(const Buffer& packet, uint32_t dst_ip);
+
 private:
   ArpCache m_arp;
   RoutingTable m_routingTable;

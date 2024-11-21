@@ -30,17 +30,8 @@ namespace simple_router {
 void
 ArpCache::periodicCheckArpRequestsAndCacheEntries()
 {
-  //std::cerr << "Checking ARP requests and cache entries" << std::endl;
-  //std::lock_guard<std::mutex> lock(m_mutex);
-
-  // caller already locked
-
-  //TODO lock!
-
-  // FILL THIS IN
-
-  //TODO 调用函数remove
-  //TODO 重发packet在router里面做？
+  //调用时已上锁
+  //不能调用函数remove, remove有锁, 会死锁
 
   for(auto it = m_cacheEntries.begin(); it != m_cacheEntries.end();) {
     //在调用前已经更新了valid
@@ -54,7 +45,7 @@ ArpCache::periodicCheckArpRequestsAndCacheEntries()
   }
 
   for(auto it = m_arpRequests.begin(); it != m_arpRequests.end();) {
-    //不能lookup，会死锁？
+    //不能lookup, 会死锁
     if((*it)->nTimesSent >= 5) {
       //如果发送了5次了，那么就要发送ICMP host unreachable
       for(auto packet_it = (*it)->packets.begin(); packet_it != (*it)->packets.end(); packet_it++) {
@@ -66,7 +57,7 @@ ArpCache::periodicCheckArpRequestsAndCacheEntries()
     }else{
       //继续发送ARP请求
 
-      auto iface = m_router.findIfaceByName((*it)->packets.front().iface); //TODO!!!!
+      auto iface = m_router.findIfaceByName((*it)->packets.front().iface); //TODO!!!!只看第一个人的iface?
 
       ethernet_hdr eth;
       memcpy(eth.ether_dhost, "\xff\xff\xff\xff\xff\xff", ETHER_ADDR_LEN);
