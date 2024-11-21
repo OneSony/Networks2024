@@ -30,8 +30,10 @@ namespace simple_router {
 void
 ArpCache::periodicCheckArpRequestsAndCacheEntries()
 {
+  //std::cerr << "Checking ARP requests and cache entries" << std::endl;
+  //std::lock_guard<std::mutex> lock(m_mutex);
 
-  std::lock_guard<std::mutex> lock(m_mutex);
+  // caller already locked
 
   //TODO lock!
 
@@ -42,6 +44,8 @@ ArpCache::periodicCheckArpRequestsAndCacheEntries()
 
   for(auto it = m_cacheEntries.begin(); it != m_cacheEntries.end();) {
     //在调用前已经更新了valid
+
+    std::cerr<<"ARP cache checking " << ipToString((*it)->ip) <<std::endl;
     if((*it)->isValid == false) {
       it = m_cacheEntries.erase(it);
     }else{

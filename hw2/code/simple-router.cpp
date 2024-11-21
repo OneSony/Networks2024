@@ -79,7 +79,7 @@ SimpleRouter::handlePacket(const Buffer& packet, const std::string& inIface)
   
   const Interface* iface = findIfaceByName(inIface);
   
-  print_hdr_eth(packet.data());
+  //print_hdr_eth(packet.data());
 
   if (iface == nullptr) {
     std::cerr << "Received packet, but interface is unknown, ignoring" << std::endl;
@@ -91,6 +91,7 @@ SimpleRouter::handlePacket(const Buffer& packet, const std::string& inIface)
     std::cerr << "Received ARP packet" << std::endl;
     const arp_hdr *arp = reinterpret_cast<const arp_hdr*>(packet.data() + sizeof(ethernet_hdr));
     
+    print_hdr_eth(packet.data());
     print_hdr_arp(packet.data()+sizeof(ethernet_hdr));
 
     if(ntohs(arp->arp_op) == arp_op_request){
@@ -142,6 +143,8 @@ SimpleRouter::handlePacket(const Buffer& packet, const std::string& inIface)
         std::memcpy(mac_vector.data(), arp->arp_sha, ETHER_ADDR_LEN);
         auto arp_requests = m_arp.insertArpEntry(mac_vector, arp->arp_sip);
 
+        std::cerr<<"---ARP reply for "<<ipToString(arp->arp_sip)<<std::endl;
+        std::cerr<<"---ARP reply MAC "<<macToString(mac_vector)<<std::endl;
         for(auto packet_it = arp_requests->packets.begin(); packet_it != arp_requests->packets.end(); packet_it++) {
           //发送packet
           Buffer packet = packet_it->packet;
@@ -149,9 +152,15 @@ SimpleRouter::handlePacket(const Buffer& packet, const std::string& inIface)
           memcpy(eth->ether_dhost, mac_vector.data(), ETHER_ADDR_LEN);
 
           std::string iface = packet_it->iface;
-          m_router.sendPacket(packet, iface);
+
+          print_hdr_eth(packet.data());
+          print_hdr_ip(packet.data()+sizeof(ethernet_hdr));
+
+          std::cerr<< "sending to " << iface <<std::endl;
+
+          sendPacket(packet, iface);
         }
-        m_arp.removeRequest(arp_request);
+        m_arp.removeRequest(arp_requests);
 
       }else{
         std::cerr << "unknown ARP reply format" << std::endl;
@@ -168,6 +177,7 @@ SimpleRouter::handlePacket(const Buffer& packet, const std::string& inIface)
     std::cerr << "Received IP packet" << std::endl;
     const ip_hdr *ip = reinterpret_cast<const ip_hdr*>(packet.data() + sizeof(ethernet_hdr));
 
+    print_hdr_eth(packet.data());
     print_hdr_ip(packet.data()+sizeof(ethernet_hdr));
 
 
@@ -211,8 +221,18 @@ forwarding logic.
       ip_hdr ip_forward = *ip;
       ip_forward.ip_ttl -= 1;
       update_checksum(&ip_forward);
+      printf("~~~forward checksum: %d\n", verify_checksum(&ip_forward));
+      std::cerr << ipToString(ip->ip_dst) << std::endl;
+      RoutingTableEntry next_hop;
+      
+      try{
+        next_hop = m_routingTable.lookup(ip->ip_dst);
+      }catch(std::runtime_error e){
+        std::cerr << "Routing entry not found" << std::endl;
+        //TODO ICMP
+        return;
+      }
 
-      RoutingTableEntry next_hop = m_routingTable.lookup(ip->ip_dst);
       printf("next_hop: %s\n", ipToString(next_hop.gw).c_str());
 
       auto next_hop_ha = m_arp.lookup(next_hop.gw);
@@ -229,7 +249,9 @@ forwarding logic.
         Buffer packet_forward;
         packet_forward.insert(packet_forward.end(), (unsigned char*)&eth_forward, (unsigned char*)&eth_forward + sizeof(ethernet_hdr));
         packet_forward.insert(packet_forward.end(), (unsigned char*)&ip_forward, (unsigned char*)&ip_forward + sizeof(ip_hdr));
-        std::cerr << "ARP request ok" << std::endl;
+        packet_forward.insert(packet_forward.end(), packet.begin() + sizeof(ethernet_hdr) + sizeof(ip_hdr), packet.end());
+        
+        std::cerr << "store request in " << next_hop.ifName << std::endl;
         m_arp.queueRequest(next_hop.gw, packet_forward, next_hop.ifName);
       }else{
         //直接转发
@@ -244,9 +266,10 @@ forwarding logic.
         Buffer packet_forward;
         packet_forward.insert(packet_forward.end(), (unsigned char*)&eth_forward, (unsigned char*)&eth_forward + sizeof(ethernet_hdr));
         packet_forward.insert(packet_forward.end(), (unsigned char*)&ip_forward, (unsigned char*)&ip_forward + sizeof(ip_hdr));
+        packet_forward.insert(packet_forward.end(), packet.begin() + sizeof(ethernet_hdr) + sizeof(ip_hdr), packet.end());
 
-
-        sendPacket(packet_forward, inIface);
+        std::cerr << "sending to " << next_hop.ifName << std::endl;
+        sendPacket(packet_forward, next_hop.ifName);
       }
     }
   }else {

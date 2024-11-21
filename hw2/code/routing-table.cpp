@@ -33,7 +33,7 @@ RoutingTable::lookup(uint32_t ip) const
 {
 
   // FILL THIS IN
-  int longest = 0;
+  int longest = -1; //!!!! not 0
   RoutingTableEntry longest_entry;
 
   for(auto it = m_entries.begin(); it != m_entries.end(); it++)
@@ -59,7 +59,7 @@ RoutingTable::lookup(uint32_t ip) const
 
   }
 
-  if(longest != 0)
+  if(longest != -1)
   {
     return longest_entry;
   }
