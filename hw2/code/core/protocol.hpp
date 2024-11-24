@@ -75,9 +75,19 @@ struct icmp_t3_hdr {
   uint8_t data[ICMP_DATA_SIZE];
 } __attribute__ ((packed)) ;
 
+/* Structure of a ICMP header
+ */
+struct icmp_echo_hdr {
+  uint8_t icmp_type;
+  uint8_t icmp_code;
+  uint16_t icmp_sum;
+  uint16_t id;
+  uint16_t seq;
+} __attribute__ ((packed)) ;
+
 /* Structure of a type11 or type3 ICMP header
  */
-struct icmp_t11_hdr {
+struct icmp_data_hdr {
   uint8_t icmp_type;
   uint8_t icmp_code;
   uint16_t icmp_sum;

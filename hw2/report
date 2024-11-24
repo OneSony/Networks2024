@@ -1,0 +1,12 @@
+别忘了把内容加进去
+ntoh
+死锁
+从上层往下层构建, ip len要加上icmp
+
+  unsigned int ip_hl:4;            /* header length */
+  unsigned int ip_v:4;             /* version */
+
+  这也是成员!
+
+文件太大了ARP会有缓存！！！30s
+返回nullptr！！！要处理

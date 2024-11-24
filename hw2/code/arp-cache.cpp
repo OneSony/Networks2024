@@ -50,7 +50,13 @@ ArpCache::periodicCheckArpRequestsAndCacheEntries()
       //如果发送了5次了，那么就要发送ICMP host unreachable
       for(auto packet_it = (*it)->packets.begin(); packet_it != (*it)->packets.end(); packet_it++) {
         //发送ICMP host unreachable
-        //TODO
+        std::cerr<<"ARP request timeout"<<std::endl;
+
+        //在本实验中只有ip包会被加入队列, 所以packet一定有ip头
+        const ip_hdr *ip = reinterpret_cast<const ip_hdr*>(packet_it->packet.data() + sizeof(ethernet_hdr));
+        m_router.sendDataICMP(3, 1, ip->ip_src, packet_it->packet);
+
+        //TODO 需要测试
       }
       //删除这个请求
       it = m_arpRequests.erase(it);

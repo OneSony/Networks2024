@@ -109,6 +109,12 @@ public:
   void
   forwardPacket(const Buffer& packet, uint32_t dst_ip);
 
+  void
+  sendDataICMP(int type, int code, uint32_t dst_ip, Buffer ori_packet);
+
+  void
+  sendEchoICMP(int type, int code, uint32_t dst_ip, Buffer ori_packet);
+
 private:
   ArpCache m_arp;
   RoutingTable m_routingTable;

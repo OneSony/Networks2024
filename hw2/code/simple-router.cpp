@@ -32,7 +32,8 @@ void SimpleRouter::forwardPacket(const Buffer& packet, uint32_t dst_ip) {
     next_hop = m_routingTable.lookup(dst_ip);
   }catch(std::runtime_error e){
     std::cerr << "Routing entry not found" << std::endl;
-    //TODO ICMP
+    ip_hdr* ip = reinterpret_cast<ip_hdr*>(const_cast<unsigned char*>(packet.data() + sizeof(ethernet_hdr)));
+    sendDataICMP(3, 1, ip->ip_src, packet); //TODO 发给自己可以吗，应该是可以
     return;
   }
 
@@ -56,44 +57,122 @@ void SimpleRouter::forwardPacket(const Buffer& packet, uint32_t dst_ip) {
   }
 }
 
-bool verify_checksum(const ip_hdr* header) {
-    uint32_t sum = 0;
-    const uint16_t* ptr = reinterpret_cast<const uint16_t*>(header);
+void SimpleRouter::sendDataICMP(int type, int code, uint32_t dst_ip, Buffer ori_packet) {
 
-    // 遍历每个 16 位单元
-    for (size_t i = 0; i < sizeof(ip_hdr) / 2; ++i) {
-        sum += *ptr++;
-    }
+  RoutingTableEntry next_hop;    
+  try{
+    next_hop = m_routingTable.lookup(dst_ip);
+  }catch(std::runtime_error e){
+    std::cerr << "Routing entry not found" << std::endl;
+    // do nothing
+    //TODO?
+    return;
+  }
 
-    // 处理高位进位
-    while (sum >> 16) {
-        sum = (sum & 0xFFFF) + (sum >> 16);
-    }
+  auto iface = findIfaceByName(next_hop.ifName);
 
-    // 如果校验和结果为 0xFFFF，则表示正确
-    return sum == 0xFFFF;
+  ip_hdr* ori_ip = reinterpret_cast<ip_hdr*>(const_cast<unsigned char*>(ori_packet.data() + sizeof(ethernet_hdr)));
+  
+  icmp_data_hdr icmp;
+  icmp.icmp_type = type;
+  icmp.icmp_code = code;
+  icmp.icmp_sum = 0;
+  icmp.unused = 0;
+
+  memcpy(icmp.data, ori_ip, sizeof(ip_hdr));
+
+  size_t ip_payload_size = ntohs(ori_ip->ip_len) - sizeof(ip_hdr);
+  size_t copy_size = (ip_payload_size < 8) ? ip_payload_size : 8;
+  memcpy(icmp.data + sizeof(ip_hdr), ori_packet.data() + sizeof(ethernet_hdr) + sizeof(ip_hdr), copy_size);
+
+  if (ip_payload_size < 8) {
+    memset(icmp.data + sizeof(ip_hdr) + copy_size, 0, 8 - copy_size);
+  }
+
+  icmp.icmp_sum = cksum(&icmp, sizeof(icmp_data_hdr)); //TODO checksum对吗
+
+
+  srand(static_cast<unsigned int>(time(0)));
+  ip_hdr ip;
+  ip.ip_v = 4;
+  ip.ip_hl = 5;
+  ip.ip_tos = 0;
+  ip.ip_len = htons(sizeof(ip_hdr) + sizeof(icmp_data_hdr));
+  ip.ip_off = htons(IP_DF);
+  ip.ip_id = htons(rand() % 65536);
+  ip.ip_ttl = 64;
+  ip.ip_p = ip_protocol_icmp;
+  ip.ip_src = iface->ip;
+  ip.ip_dst = ori_ip->ip_src;
+  ip.ip_sum = 0;
+  ip.ip_sum = cksum(&ip, sizeof(ip_hdr));
+
+  ethernet_hdr eth;
+  memcpy(eth.ether_shost, iface->addr.data(), ETHER_ADDR_LEN);
+  eth.ether_type = htons(ethertype_ip);
+
+  Buffer packet_ttl;
+  packet_ttl.insert(packet_ttl.end(), (unsigned char*)&eth, (unsigned char*)&eth + sizeof(ethernet_hdr));
+  packet_ttl.insert(packet_ttl.end(), (unsigned char*)&ip, (unsigned char*)&ip + sizeof(ip_hdr));
+  packet_ttl.insert(packet_ttl.end(), (unsigned char*)&icmp, (unsigned char*)&icmp + sizeof(icmp_data_hdr));
+
+  forwardPacket(packet_ttl, ip.ip_dst);
 }
 
 
-// Function to calculate the checksum
-void update_checksum(ip_hdr* header) {
-    uint32_t sum = 0;
+void SimpleRouter::sendEchoICMP(int type, int code, uint32_t dst_ip, Buffer ori_packet) {
 
-    header->ip_sum = 0;
+  RoutingTableEntry next_hop;    
+  try{
+    next_hop = m_routingTable.lookup(dst_ip);
+  }catch(std::runtime_error e){
+    std::cerr << "Routing entry not found" << std::endl;
+    // do nothing
+    //TODO?
+    return;
+  }
 
-    const uint16_t* ptr = reinterpret_cast<const uint16_t*>(header);
+  auto iface = findIfaceByName(next_hop.ifName);
 
-    // 遍历每个 16 位单元
-    for (size_t i = 0; i < sizeof(ip_hdr) / 2; ++i) {
-        sum += *ptr++;
-    }
+  ip_hdr* ori_ip = reinterpret_cast<ip_hdr*>(const_cast<unsigned char*>(ori_packet.data() + sizeof(ethernet_hdr)));
 
-    // 处理高位进位
-    while (sum >> 16) {
-        sum = (sum & 0xFFFF) + (sum >> 16);
-    }
+  //先拷贝一份
+  Buffer icmp_reply_packet;
+  icmp_reply_packet.insert(icmp_reply_packet.end(), ori_packet.begin() + sizeof(ethernet_hdr) + sizeof(ip_hdr), ori_packet.begin() + sizeof(ethernet_hdr) + ntohs(ori_ip->ip_len));
+  
+  icmp_echo_hdr* icmp_ori = reinterpret_cast<icmp_echo_hdr*>(const_cast<unsigned char*>(ori_packet.data()) + sizeof(ethernet_hdr) + sizeof(ip_hdr));
+  icmp_echo_hdr* icmp_reply = reinterpret_cast<icmp_echo_hdr*>(icmp_reply_packet.data());
+  icmp_reply->icmp_type = 0;
+  icmp_reply->icmp_sum = 0;
+  icmp_reply->seq = htons(ntohs(icmp_ori->seq) + 1);
 
-    header->ip_sum = static_cast<uint16_t>(~sum);
+  icmp_reply->icmp_sum = cksum(icmp_reply_packet.data(), icmp_reply_packet.size());
+
+  srand(static_cast<unsigned int>(time(0)));
+  ip_hdr ip;
+  ip.ip_v = 4;
+  ip.ip_hl = 5;
+  ip.ip_tos = 0;
+  ip.ip_len = htons(sizeof(ip_hdr) + icmp_reply_packet.size());
+  ip.ip_off = htons(IP_DF);
+  ip.ip_id = htons(rand() % 65536);
+  ip.ip_ttl = 64;
+  ip.ip_p = ip_protocol_icmp;
+  ip.ip_src = iface->ip;
+  ip.ip_dst = ori_ip->ip_src;
+  ip.ip_sum = 0;
+  ip.ip_sum = cksum(&ip, sizeof(ip_hdr));
+
+  ethernet_hdr eth;
+  memcpy(eth.ether_shost, iface->addr.data(), ETHER_ADDR_LEN);
+  eth.ether_type = htons(ethertype_ip);
+
+  Buffer packet;
+  packet.insert(packet.end(), (unsigned char*)&eth, (unsigned char*)&eth + sizeof(ethernet_hdr));
+  packet.insert(packet.end(), (unsigned char*)&ip, (unsigned char*)&ip + sizeof(ip_hdr));
+  packet.insert(packet.end(), icmp_reply_packet.begin(), icmp_reply_packet.end());
+
+  forwardPacket(packet, ip.ip_dst);
 }
 
 void
@@ -167,6 +246,11 @@ SimpleRouter::handlePacket(const Buffer& packet, const std::string& inIface)
         std::memcpy(mac_vector.data(), arp->arp_sha, ETHER_ADDR_LEN);
         auto arp_requests = m_arp.insertArpEntry(mac_vector, arp->arp_sip);
 
+        if(arp_requests == nullptr){
+          std::cerr << "ARP has already been handled" << std::endl;
+          return;
+        }
+
         for(auto packet_it = arp_requests->packets.begin(); packet_it != arp_requests->packets.end(); packet_it++) {
           //发送packet
           Buffer packet = packet_it->packet;
@@ -205,105 +289,63 @@ SimpleRouter::handlePacket(const Buffer& packet, const std::string& inIface)
       std::cerr << "IP packet length is too short" << std::endl;
       return;
     }
-    if(!verify_checksum(ip)){
-      std::cerr << "Checksum is incorrect" << std::endl;
-      return;
-    }
 
-    if(ip->ip_ttl == 0 || ip->ip_ttl == 1){
-      std::cerr << "TTL is 0" << std::endl;
-
-      //TODO 附带的data是TTL多少
-
-      icmp_t11_hdr icmp_ttl;
-      icmp_ttl.icmp_type = 11;
-      icmp_ttl.icmp_code = 0;
-      icmp_ttl.icmp_sum = 0;
-      icmp_ttl.unused = 0;
-
-      memcpy(icmp_ttl.data, ip, sizeof(ip_hdr));
-
-      size_t ip_payload_size = ntohs(ip->ip_len) - sizeof(ip_hdr);
-      size_t copy_size = (ip_payload_size < 8) ? ip_payload_size : 8;
-      memcpy(icmp_ttl.data + sizeof(ip_hdr), packet.data() + sizeof(ethernet_hdr) + sizeof(ip_hdr), copy_size);
-
-      if (ip_payload_size < 8) {
-        memset(icmp_ttl.data + sizeof(ip_hdr) + copy_size, 0, 8 - copy_size);
-      }
-
-      icmp_ttl.icmp_sum = cksum(&icmp_ttl, sizeof(icmp_t11_hdr)); //TODO
-
-      srand(static_cast<unsigned int>(time(0)));
-      ip_hdr ip_ttl;
-      ip_ttl.ip_v = 4;
-      ip_ttl.ip_hl = 5;
-      ip_ttl.ip_tos = 0;
-      ip_ttl.ip_len = htons(sizeof(ip_hdr) + sizeof(icmp_t11_hdr));
-      ip_ttl.ip_off = htons(IP_DF);
-      ip_ttl.ip_id = htons(rand() % 65536);
-      ip_ttl.ip_ttl = 64;
-      ip_ttl.ip_p = ip_protocol_icmp;
-      ip_ttl.ip_sum = 0;
-      ip_ttl.ip_src = iface->ip;
-      ip_ttl.ip_dst = ip->ip_src;
-      update_checksum(&ip_ttl);
-
-      ethernet_hdr eth_ttl;
-      memcpy(eth_ttl.ether_shost, iface->addr.data(), ETHER_ADDR_LEN);
-      eth_ttl.ether_type = htons(ethertype_ip);
-
-      Buffer packet_ttl;
-      packet_ttl.insert(packet_ttl.end(), (unsigned char*)&eth_ttl, (unsigned char*)&eth_ttl + sizeof(ethernet_hdr));
-      packet_ttl.insert(packet_ttl.end(), (unsigned char*)&ip_ttl, (unsigned char*)&ip_ttl + sizeof(ip_hdr));
-      packet_ttl.insert(packet_ttl.end(), (unsigned char*)&icmp_ttl, (unsigned char*)&icmp_ttl + sizeof(icmp_t11_hdr));
-
-      //print_hdr_eth(packet_ttl.data());
-      //print_hdr_ip(packet_ttl.data()+sizeof(ethernet_hdr));
-      //print_hdr_icmp(packet_ttl.data()+sizeof(ethernet_hdr)+sizeof(ip_hdr));
-      //print_hdr_ip(packet_ttl.data()+sizeof(ethernet_hdr)+sizeof(ip_hdr)+sizeof(icmp_t11_hdr)-28);
-
-      forwardPacket(packet_ttl, ip_ttl.ip_dst);
+    uint16_t checksum=cksum(ip, sizeof(ip_hdr));
+    if(checksum!=0xffff){
+      std::cerr << "IP checksum is incorrect" << std::endl;
       return;
     }
 
     std::cerr << "IP is correct" << std::endl;
 
+    std::cerr << "Destination IP: " << ipToString(ip->ip_dst) << std::endl;
+    std::cerr << "This IP: " << ipToString(iface->ip) << std::endl;
+
     // 判断是否是到本机
     if(ip->ip_dst == iface->ip){
 
+      std::cerr << "Packet is for me" << std::endl;
+
       if(ip->ip_p == ip_protocol_icmp){
-        //ICMP
 
-        //const icmp_hdr* icmp = reinterpret_cast<const icmp_hdr*>(packet.data() + sizeof(ethernet_hdr) + sizeof(ip_hdr));
+        //通用ICMP表头
+        icmp_hdr* icmp = reinterpret_cast<icmp_hdr*>(const_cast<unsigned char*>(packet.data() + sizeof(ethernet_hdr) + sizeof(ip_hdr)));
+        uint16_t checksum=cksum(icmp, ntohs(ip->ip_len) - sizeof(ip_hdr));
+        if(checksum!=0xffff){ //cksum如果是0返回0xffff
+          std::cerr << "ICMP checksum is incorrect" << std::endl;
+          return;
+        }
 
-        //TODO
-        /*
-        • If the packet is an ICMP echo request and its checksum is valid, send an ICMP echo reply to the
-        sending host.
-        */
+        std::cerr << "ICMP is correct" << std::endl;
+        
+        sendEchoICMP(0, 0, ip->ip_src, packet); //TODO
 
       }else if(ip->ip_p == 6 || ip->ip_p == 17){
         //TCP or UDP
         std::cerr << "TCP or UDP" << std::endl;
+        sendDataICMP(3, 3, ip->ip_src, packet); //TODO 需要检查
 
-        /*
-        • If the packet contains a TCP or UDP payload, send an ICMP port unreachable to the sending host.
-        Otherwise, ignore the packet. Packets destined elsewhere should be forwarded using your normal
-        forwarding logic.
-        */
-
-        //TODO 
       }else{
         std::cerr << "Unknown protocol" << std::endl;
       }
 
     }else{
 
+      if(ip->ip_ttl == 0 || ip->ip_ttl == 1){
+        std::cerr << "TTL is 0" << std::endl;
+        //TODO 附带的data是TTL多少
+        sendDataICMP(11, 0, ip->ip_src, packet);
+        return;
+      }
+
       std::cerr<<"Forwarding packet"<<std::endl;
+
+      //forward的packet不需要知道本机ip
 
       ip_hdr ip_forward = *ip;
       ip_forward.ip_ttl -= 1;
-      update_checksum(&ip_forward);
+      ip_forward.ip_sum = 0;
+      ip_forward.ip_sum = cksum(&ip_forward, sizeof(ip_hdr));
       
       ethernet_hdr eth_forward;
       //memcpy(eth_forward.ether_dhost, next_hop_ha->mac.data(), ETHER_ADDR_LEN);
