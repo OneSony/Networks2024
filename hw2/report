@@ -10,3 +10,5 @@ ntoh
 
 文件太大了ARP会有缓存！！！30s
 返回nullptr！！！要处理
+
+server2 wget http://192.168.2.2:80/123.png

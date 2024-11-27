@@ -61,6 +61,9 @@ RoutingTable::lookup(uint32_t ip) const
 
   if(longest != -1)
   {
+    if(longest_entry.gw == 0){
+      longest_entry.gw = ip;
+    }
     return longest_entry;
   }
   else{
