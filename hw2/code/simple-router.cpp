@@ -25,7 +25,7 @@ namespace simple_router {
 //////////////////////////////////////////////////////////////////////////
 // IMPLEMENT THIS METHOD
 
-void SimpleRouter::forwardPacket(const Buffer& packet, uint32_t dst_ip) {
+void SimpleRouter::forwardPacket(const Buffer& packet, uint32_t dst_ip) { //这里添加以太网表头
   
   RoutingTableEntry next_hop;    
   try{
@@ -40,6 +40,7 @@ void SimpleRouter::forwardPacket(const Buffer& packet, uint32_t dst_ip) {
   printf("next_hop: %s\n", ipToString(next_hop.gw).c_str());
 
   auto next_hop_ha = m_arp.lookup(next_hop.gw);
+  auto iface = findIfaceByName(next_hop.ifName);
 
   if(next_hop_ha == nullptr){
     std::cerr << "ARP not found" << std::endl;
@@ -48,12 +49,19 @@ void SimpleRouter::forwardPacket(const Buffer& packet, uint32_t dst_ip) {
 
   }else{
     std::cerr << "ARP found" << std::endl;
-    ethernet_hdr* eth = reinterpret_cast<ethernet_hdr*>(const_cast<unsigned char*>(packet.data()));
-    memcpy(eth->ether_dhost, next_hop_ha->mac.data(), ETHER_ADDR_LEN);
+
+    ethernet_hdr eth;
+    memcpy(eth.ether_shost, iface->addr.data(), ETHER_ADDR_LEN);
+    memcpy(eth.ether_dhost, next_hop_ha->mac.data(), ETHER_ADDR_LEN);
+    eth.ether_type = htons(ethertype_ip);
+
+    Buffer packet_full;
+    packet_full.insert(packet_full.end(), (unsigned char*)&eth, (unsigned char*)&eth + sizeof(ethernet_hdr));
+    packet_full.insert(packet_full.end(), packet.begin(), packet.end());
 
     std::cerr << "sending to " << next_hop.ifName << std::endl;
 
-    sendPacket(packet, next_hop.ifName);
+    sendPacket(packet_full, next_hop.ifName);
   }
 }
 
@@ -107,12 +115,8 @@ void SimpleRouter::sendDataICMP(int type, int code, uint32_t dst_ip, Buffer ori_
   ip.ip_sum = 0;
   ip.ip_sum = cksum(&ip, sizeof(ip_hdr));
 
-  ethernet_hdr eth;
-  memcpy(eth.ether_shost, iface->addr.data(), ETHER_ADDR_LEN);
-  eth.ether_type = htons(ethertype_ip);
 
   Buffer packet_ttl;
-  packet_ttl.insert(packet_ttl.end(), (unsigned char*)&eth, (unsigned char*)&eth + sizeof(ethernet_hdr));
   packet_ttl.insert(packet_ttl.end(), (unsigned char*)&ip, (unsigned char*)&ip + sizeof(ip_hdr));
   packet_ttl.insert(packet_ttl.end(), (unsigned char*)&icmp, (unsigned char*)&icmp + sizeof(icmp_data_hdr));
 
@@ -163,12 +167,7 @@ void SimpleRouter::sendEchoICMP(int type, int code, uint32_t dst_ip, Buffer ori_
   ip.ip_sum = 0;
   ip.ip_sum = cksum(&ip, sizeof(ip_hdr));
 
-  ethernet_hdr eth;
-  memcpy(eth.ether_shost, iface->addr.data(), ETHER_ADDR_LEN);
-  eth.ether_type = htons(ethertype_ip);
-
   Buffer packet;
-  packet.insert(packet.end(), (unsigned char*)&eth, (unsigned char*)&eth + sizeof(ethernet_hdr));
   packet.insert(packet.end(), (unsigned char*)&ip, (unsigned char*)&ip + sizeof(ip_hdr));
   packet.insert(packet.end(), icmp_reply_packet.begin(), icmp_reply_packet.end());
 
@@ -254,8 +253,13 @@ SimpleRouter::handlePacket(const Buffer& packet, const std::string& inIface)
         for(auto packet_it = arp_requests->packets.begin(); packet_it != arp_requests->packets.end(); packet_it++) {
           //发送packet
           Buffer packet = packet_it->packet;
-          ethernet_hdr* eth = reinterpret_cast<ethernet_hdr*>(packet.data());
-          memcpy(eth->ether_dhost, mac_vector.data(), ETHER_ADDR_LEN);
+
+          ethernet_hdr eth;
+          memcpy(eth.ether_shost, iface->addr.data(), ETHER_ADDR_LEN);
+          memcpy(eth.ether_dhost, mac_vector.data(), ETHER_ADDR_LEN);
+          eth.ether_type = htons(ethertype_ip);
+
+          packet.insert(packet.begin(), (unsigned char*)&eth, (unsigned char*)&eth + sizeof(ethernet_hdr));
 
           std::string iface = packet_it->iface;
 
@@ -308,6 +312,8 @@ SimpleRouter::handlePacket(const Buffer& packet, const std::string& inIface)
 
       if(ip->ip_p == ip_protocol_icmp){
 
+        //不需要检查TTL, 因为只要收到了就是TTL>0, 这是面向本机的, 不需要转发
+
         //通用ICMP表头
         icmp_hdr* icmp = reinterpret_cast<icmp_hdr*>(const_cast<unsigned char*>(packet.data() + sizeof(ethernet_hdr) + sizeof(ip_hdr)));
         uint16_t checksum=cksum(icmp, ntohs(ip->ip_len) - sizeof(ip_hdr));
@@ -347,13 +353,8 @@ SimpleRouter::handlePacket(const Buffer& packet, const std::string& inIface)
       ip_forward.ip_sum = 0;
       ip_forward.ip_sum = cksum(&ip_forward, sizeof(ip_hdr));
       
-      ethernet_hdr eth_forward;
-      //memcpy(eth_forward.ether_dhost, next_hop_ha->mac.data(), ETHER_ADDR_LEN);
-      memcpy(eth_forward.ether_shost, iface->addr.data(), ETHER_ADDR_LEN);
-      eth_forward.ether_type = htons(ethertype_ip);
 
       Buffer packet_forward;
-      packet_forward.insert(packet_forward.end(), (unsigned char*)&eth_forward, (unsigned char*)&eth_forward + sizeof(ethernet_hdr));
       packet_forward.insert(packet_forward.end(), (unsigned char*)&ip_forward, (unsigned char*)&ip_forward + sizeof(ip_hdr));
       packet_forward.insert(packet_forward.end(), packet.begin() + sizeof(ethernet_hdr) + sizeof(ip_hdr), packet.end());
       
