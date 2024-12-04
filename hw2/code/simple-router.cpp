@@ -244,6 +244,7 @@ SimpleRouter::handlePacket(const Buffer& packet, const std::string& inIface)
         Buffer mac_vector(ETHER_ADDR_LEN);
         std::memcpy(mac_vector.data(), arp->arp_sha, ETHER_ADDR_LEN);
         auto arp_requests = m_arp.insertArpEntry(mac_vector, arp->arp_sip);
+        m_arp.removeRequest(arp_requests); //先从队列中删除, 避免重复ARP retry
 
         if(arp_requests == nullptr){
           std::cerr << "ARP has already been handled" << std::endl;
@@ -267,7 +268,6 @@ SimpleRouter::handlePacket(const Buffer& packet, const std::string& inIface)
 
           sendPacket(packet, iface);
         }
-        m_arp.removeRequest(arp_requests);
 
       }else{
         std::cerr << "unknown ARP reply format" << std::endl;
