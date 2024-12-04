@@ -46,55 +46,58 @@ ArpCache::periodicCheckArpRequestsAndCacheEntries()
 
   for(auto it = m_arpRequests.begin(); it != m_arpRequests.end();) {
     //不能lookup, 会死锁
-    if((*it)->nTimesSent >= 5) {
-      //如果发送了5次了，那么就要发送ICMP host unreachable
-      for(auto packet_it = (*it)->packets.begin(); packet_it != (*it)->packets.end(); packet_it++) {
-        //发送ICMP host unreachable
-        std::cerr<<"ARP request timeout"<<std::endl;
 
-        //在本实验中只有ip包会被加入队列, 所以packet一定有ip头
-        const ip_hdr *ip = reinterpret_cast<const ip_hdr*>(packet_it->packet.data() + sizeof(ethernet_hdr));
-        m_router.sendDataICMP(3, 1, ip->ip_src, packet_it->packet);
+    if(steady_clock::now() - (*it)->timeSent > seconds(1)) {
+      if((*it)->nTimesSent >= 5) {
+        //如果发送了5次了，那么就要发送ICMP host unreachable
+        for(auto packet_it = (*it)->packets.begin(); packet_it != (*it)->packets.end(); packet_it++) {
+          //发送ICMP host unreachable
+          std::cerr<<"ARP request timeout"<<std::endl;
 
-        //TODO 需要测试
+          //在本实验中只有ip包会被加入队列, 所以packet一定有ip头
+          const ip_hdr *ip = reinterpret_cast<const ip_hdr*>(packet_it->packet.data() + sizeof(ethernet_hdr));
+          m_router.sendDataICMP(3, 1, ip->ip_src, packet_it->packet);
+
+          //TODO 需要测试
+        }
+        //删除这个请求
+        it = m_arpRequests.erase(it);
+      }else{
+        //继续发送ARP请求
+
+        auto iface = m_router.findIfaceByName((*it)->packets.front().iface); //TODO!!!!只看第一个人的iface?
+
+        ethernet_hdr eth;
+        memcpy(eth.ether_dhost, "\xff\xff\xff\xff\xff\xff", ETHER_ADDR_LEN);
+        memcpy(eth.ether_shost, iface->addr.data(), ETHER_ADDR_LEN);
+
+        eth.ether_type = htons(ethertype_arp);
+
+        arp_hdr arp_request;
+        arp_request.arp_hrd = htons(arp_hrd_ethernet);      // Ethernet
+        arp_request.arp_pro = htons(0x0800); // IPv4
+        arp_request.arp_hln = ETHER_ADDR_LEN;              // MAC 地址长度
+        arp_request.arp_pln = 4;              // IPv4 地址长度
+        arp_request.arp_op = htons(arp_op_request);
+        memcpy(arp_request.arp_sha, iface->addr.data(), ETHER_ADDR_LEN);
+        arp_request.arp_sip = iface->ip;
+        memcpy(arp_request.arp_tha, "\xff\xff\xff\xff\xff\xff", ETHER_ADDR_LEN);
+        arp_request.arp_tip = (*it)->ip;
+
+        Buffer packet_request;
+        packet_request.insert(packet_request.end(), (unsigned char*)&eth, (unsigned char*)&eth + sizeof(ethernet_hdr));
+        packet_request.insert(packet_request.end(), (unsigned char*)&arp_request, (unsigned char*)&arp_request + sizeof(arp_hdr));
+
+        std::cerr<<"ARP request making"<<std::endl;
+        print_hdr_eth(packet_request.data());
+        print_hdr_arp(packet_request.data()+sizeof(ethernet_hdr));
+
+        m_router.sendPacket(packet_request, iface->name);
+
+        (*it)->timeSent = steady_clock::now();
+        (*it)->nTimesSent++;
+        it++;
       }
-      //删除这个请求
-      it = m_arpRequests.erase(it);
-    }else{
-      //继续发送ARP请求
-
-      auto iface = m_router.findIfaceByName((*it)->packets.front().iface); //TODO!!!!只看第一个人的iface?
-
-      ethernet_hdr eth;
-      memcpy(eth.ether_dhost, "\xff\xff\xff\xff\xff\xff", ETHER_ADDR_LEN);
-      memcpy(eth.ether_shost, iface->addr.data(), ETHER_ADDR_LEN);
-
-      eth.ether_type = htons(ethertype_arp);
-
-      arp_hdr arp_request;
-      arp_request.arp_hrd = htons(arp_hrd_ethernet);      // Ethernet
-      arp_request.arp_pro = htons(0x0800); // IPv4
-      arp_request.arp_hln = ETHER_ADDR_LEN;              // MAC 地址长度
-      arp_request.arp_pln = 4;              // IPv4 地址长度
-      arp_request.arp_op = htons(arp_op_request);
-      memcpy(arp_request.arp_sha, iface->addr.data(), ETHER_ADDR_LEN);
-      arp_request.arp_sip = iface->ip;
-      memcpy(arp_request.arp_tha, "\xff\xff\xff\xff\xff\xff", ETHER_ADDR_LEN);
-      arp_request.arp_tip = (*it)->ip;
-
-      Buffer packet_request;
-      packet_request.insert(packet_request.end(), (unsigned char*)&eth, (unsigned char*)&eth + sizeof(ethernet_hdr));
-      packet_request.insert(packet_request.end(), (unsigned char*)&arp_request, (unsigned char*)&arp_request + sizeof(arp_hdr));
-
-      std::cerr<<"ARP request making"<<std::endl;
-      print_hdr_eth(packet_request.data());
-      print_hdr_arp(packet_request.data()+sizeof(ethernet_hdr));
-
-      m_router.sendPacket(packet_request, iface->name);
-
-      (*it)->timeSent = steady_clock::now();
-      (*it)->nTimesSent++;
-      it++;
     }
   }
 
