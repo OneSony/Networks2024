@@ -25,7 +25,9 @@ namespace simple_router {
 //////////////////////////////////////////////////////////////////////////
 // IMPLEMENT THIS METHOD
 
-void SimpleRouter::forwardPacket(const Buffer& packet, uint32_t dst_ip) { //这里添加以太网表头
+void SimpleRouter::forwardPacket(const Buffer& packet, uint32_t src_ip, uint32_t dst_ip) { //这里添加以太网表头
+  
+  //src_ip用来构建ICMP
   
   RoutingTableEntry next_hop;    
   try{
@@ -33,7 +35,9 @@ void SimpleRouter::forwardPacket(const Buffer& packet, uint32_t dst_ip) { //这�
   }catch(std::runtime_error e){
     std::cerr << "Routing entry not found" << std::endl;
     ip_hdr* ip = reinterpret_cast<ip_hdr*>(const_cast<unsigned char*>(packet.data() + sizeof(ethernet_hdr)));
-    sendDataICMP(3, 1, ip->ip_src, packet); //TODO 发给自己可以吗，应该是可以
+
+    //TODO 这里有问题TODO 这里的packet是不是不包含以太网表头
+    sendDataICMP(3, 1, src_ip, ip->ip_src, packet); //TODO 发给自己可以吗，应该是可以
     return;
   }
 
@@ -43,12 +47,12 @@ void SimpleRouter::forwardPacket(const Buffer& packet, uint32_t dst_ip) { //这�
   auto iface = findIfaceByName(next_hop.ifName);
 
   if(next_hop_ha == nullptr){
-    std::cerr << "ARP not found" << std::endl;
-    std::cerr << "store request in " << next_hop.ifName << std::endl;
+    std::cerr << "main: ARP not found" << std::endl;
+    std::cerr << "main: store request in " << next_hop.ifName << std::endl;
     m_arp.queueRequest(next_hop.gw, packet, next_hop.ifName);
 
   }else{
-    std::cerr << "ARP found" << std::endl;
+    std::cerr << "main: ARP found" << std::endl;
 
     ethernet_hdr eth;
     memcpy(eth.ether_shost, iface->addr.data(), ETHER_ADDR_LEN);
@@ -59,27 +63,15 @@ void SimpleRouter::forwardPacket(const Buffer& packet, uint32_t dst_ip) { //这�
     packet_full.insert(packet_full.end(), (unsigned char*)&eth, (unsigned char*)&eth + sizeof(ethernet_hdr));
     packet_full.insert(packet_full.end(), packet.begin(), packet.end());
 
-    std::cerr << "sending to " << next_hop.ifName << std::endl;
+    std::cerr << "main: sending to " << next_hop.ifName << std::endl;
 
     sendPacket(packet_full, next_hop.ifName);
   }
 }
 
-void SimpleRouter::sendDataICMP(int type, int code, uint32_t dst_ip, Buffer ori_packet) {
+void SimpleRouter::sendDataICMP(int type, int code, uint32_t src_ip, uint32_t dst_ip, Buffer ori_packet) { //packet没有以太网头
 
-  RoutingTableEntry next_hop;    
-  try{
-    next_hop = m_routingTable.lookup(dst_ip);
-  }catch(std::runtime_error e){
-    std::cerr << "Routing entry not found" << std::endl;
-    // do nothing
-    //TODO?
-    return;
-  }
-
-  auto iface = findIfaceByName(next_hop.ifName);
-
-  ip_hdr* ori_ip = reinterpret_cast<ip_hdr*>(const_cast<unsigned char*>(ori_packet.data() + sizeof(ethernet_hdr)));
+  ip_hdr* ori_ip = reinterpret_cast<ip_hdr*>(const_cast<unsigned char*>(ori_packet.data()));
   
   icmp_data_hdr icmp;
   icmp.icmp_type = type;
@@ -91,7 +83,7 @@ void SimpleRouter::sendDataICMP(int type, int code, uint32_t dst_ip, Buffer ori_
 
   size_t ip_payload_size = ntohs(ori_ip->ip_len) - sizeof(ip_hdr);
   size_t copy_size = (ip_payload_size < 8) ? ip_payload_size : 8;
-  memcpy(icmp.data + sizeof(ip_hdr), ori_packet.data() + sizeof(ethernet_hdr) + sizeof(ip_hdr), copy_size);
+  memcpy(icmp.data + sizeof(ip_hdr), ori_packet.data() + sizeof(ip_hdr), copy_size);
 
   if (ip_payload_size < 8) {
     memset(icmp.data + sizeof(ip_hdr) + copy_size, 0, 8 - copy_size);
@@ -110,8 +102,8 @@ void SimpleRouter::sendDataICMP(int type, int code, uint32_t dst_ip, Buffer ori_
   ip.ip_id = htons(rand() % 65536);
   ip.ip_ttl = 64;
   ip.ip_p = ip_protocol_icmp;
-  ip.ip_src = iface->ip;
-  ip.ip_dst = ori_ip->ip_src;
+  ip.ip_src = src_ip;
+  ip.ip_dst = dst_ip;
   ip.ip_sum = 0;
   ip.ip_sum = cksum(&ip, sizeof(ip_hdr));
 
@@ -120,35 +112,23 @@ void SimpleRouter::sendDataICMP(int type, int code, uint32_t dst_ip, Buffer ori_
   packet_ttl.insert(packet_ttl.end(), (unsigned char*)&ip, (unsigned char*)&ip + sizeof(ip_hdr));
   packet_ttl.insert(packet_ttl.end(), (unsigned char*)&icmp, (unsigned char*)&icmp + sizeof(icmp_data_hdr));
 
-  forwardPacket(packet_ttl, ip.ip_dst);
+  forwardPacket(packet_ttl, src_ip, dst_ip);
 }
 
 
-void SimpleRouter::sendEchoICMP(int type, int code, uint32_t dst_ip, Buffer ori_packet) {
+void SimpleRouter::sendEchoICMP(int type, int code, uint32_t src_ip, uint32_t dst_ip, Buffer ori_packet) { //packet没有以太网头
 
-  RoutingTableEntry next_hop;    
-  try{
-    next_hop = m_routingTable.lookup(dst_ip);
-  }catch(std::runtime_error e){
-    std::cerr << "Routing entry not found" << std::endl;
-    // do nothing
-    //TODO?
-    return;
-  }
-
-  auto iface = findIfaceByName(next_hop.ifName);
-
-  ip_hdr* ori_ip = reinterpret_cast<ip_hdr*>(const_cast<unsigned char*>(ori_packet.data() + sizeof(ethernet_hdr)));
+  ip_hdr* ori_ip = reinterpret_cast<ip_hdr*>(const_cast<unsigned char*>(ori_packet.data()));
 
   //先拷贝一份
   Buffer icmp_reply_packet;
-  icmp_reply_packet.insert(icmp_reply_packet.end(), ori_packet.begin() + sizeof(ethernet_hdr) + sizeof(ip_hdr), ori_packet.begin() + sizeof(ethernet_hdr) + ntohs(ori_ip->ip_len));
+  icmp_reply_packet.insert(icmp_reply_packet.end(), ori_packet.begin() + sizeof(ip_hdr), ori_packet.begin() + ntohs(ori_ip->ip_len));
   
-  icmp_echo_hdr* icmp_ori = reinterpret_cast<icmp_echo_hdr*>(const_cast<unsigned char*>(ori_packet.data()) + sizeof(ethernet_hdr) + sizeof(ip_hdr));
+  //icmp_echo_hdr* icmp_ori = reinterpret_cast<icmp_echo_hdr*>(const_cast<unsigned char*>(ori_packet.data()) + sizeof(ip_hdr));
   icmp_echo_hdr* icmp_reply = reinterpret_cast<icmp_echo_hdr*>(icmp_reply_packet.data());
   icmp_reply->icmp_type = 0;
   icmp_reply->icmp_sum = 0;
-  icmp_reply->seq = htons(ntohs(icmp_ori->seq) + 1);
+  //icmp_reply->seq = htons(ntohs(icmp_ori->seq) + 1); 不需要加1啊
 
   icmp_reply->icmp_sum = cksum(icmp_reply_packet.data(), icmp_reply_packet.size());
 
@@ -162,8 +142,8 @@ void SimpleRouter::sendEchoICMP(int type, int code, uint32_t dst_ip, Buffer ori_
   ip.ip_id = htons(rand() % 65536);
   ip.ip_ttl = 64;
   ip.ip_p = ip_protocol_icmp;
-  ip.ip_src = iface->ip;
-  ip.ip_dst = ori_ip->ip_src;
+  ip.ip_src = src_ip;
+  ip.ip_dst = dst_ip;
   ip.ip_sum = 0;
   ip.ip_sum = cksum(&ip, sizeof(ip_hdr));
 
@@ -171,7 +151,7 @@ void SimpleRouter::sendEchoICMP(int type, int code, uint32_t dst_ip, Buffer ori_
   packet.insert(packet.end(), (unsigned char*)&ip, (unsigned char*)&ip + sizeof(ip_hdr));
   packet.insert(packet.end(), icmp_reply_packet.begin(), icmp_reply_packet.end());
 
-  forwardPacket(packet, ip.ip_dst);
+  forwardPacket(packet, src_ip, dst_ip);
 }
 
 void
@@ -196,13 +176,11 @@ SimpleRouter::handlePacket(const Buffer& packet, const std::string& inIface)
   }
 
   // handle ARP
+  // ARP只需要管自己子网的
   if (ntohs(hdr->ether_type) == ethertype_arp) {
     std::cerr << "Received ARP packet" << std::endl;
     const arp_hdr *arp = reinterpret_cast<const arp_hdr*>(packet.data() + sizeof(ethernet_hdr));
     
-    print_hdr_eth(packet.data());
-    print_hdr_arp(packet.data()+sizeof(ethernet_hdr));
-
     if(ntohs(arp->arp_op) == arp_op_request){
       std::cerr << "Received ARP request" << std::endl;
 
@@ -255,6 +233,8 @@ SimpleRouter::handlePacket(const Buffer& packet, const std::string& inIface)
           //发送packet
           Buffer packet = packet_it->packet;
 
+          //std::cerr << "!!!packet_size" << packet.size()<< std::endl;
+
           ethernet_hdr eth;
           memcpy(eth.ether_shost, iface->addr.data(), ETHER_ADDR_LEN);
           memcpy(eth.ether_dhost, mac_vector.data(), ETHER_ADDR_LEN);
@@ -284,8 +264,8 @@ SimpleRouter::handlePacket(const Buffer& packet, const std::string& inIface)
     std::cerr << "Received IP packet" << std::endl;
     const ip_hdr *ip = reinterpret_cast<const ip_hdr*>(packet.data() + sizeof(ethernet_hdr));
 
-    print_hdr_eth(packet.data());
-    print_hdr_ip(packet.data()+sizeof(ethernet_hdr));
+    //print_hdr_eth(packet.data());
+    //print_hdr_ip(packet.data()+sizeof(ethernet_hdr));
 
 
     // meets minimum length & checksum
@@ -305,14 +285,21 @@ SimpleRouter::handlePacket(const Buffer& packet, const std::string& inIface)
     std::cerr << "Destination IP: " << ipToString(ip->ip_dst) << std::endl;
     std::cerr << "This IP: " << ipToString(iface->ip) << std::endl;
 
+
+    // 遍历接口
+
+    auto dst_iface = findIfaceByIp(ip->ip_dst);
+
     // 判断是否是到本机
-    if(ip->ip_dst == iface->ip){
+    if(dst_iface != nullptr){
 
       std::cerr << "Packet is for me" << std::endl;
 
       if(ip->ip_p == ip_protocol_icmp){
 
         //不需要检查TTL, 因为只要收到了就是TTL>0, 这是面向本机的, 不需要转发
+
+        print_hdr_echo_icmp(packet.data() + sizeof(ethernet_hdr) + sizeof(ip_hdr));
 
         //通用ICMP表头
         icmp_hdr* icmp = reinterpret_cast<icmp_hdr*>(const_cast<unsigned char*>(packet.data() + sizeof(ethernet_hdr) + sizeof(ip_hdr)));
@@ -323,13 +310,20 @@ SimpleRouter::handlePacket(const Buffer& packet, const std::string& inIface)
         }
 
         std::cerr << "ICMP is correct" << std::endl;
-        
-        sendEchoICMP(0, 0, ip->ip_src, packet); //TODO
+
+        Buffer ip_packet;
+        ip_packet.insert(ip_packet.end(), packet.begin() + sizeof(ethernet_hdr), packet.end());
+
+        sendEchoICMP(0, 0, ip->ip_dst, ip->ip_src, ip_packet);
 
       }else if(ip->ip_p == 6 || ip->ip_p == 17){
         //TCP or UDP
         std::cerr << "TCP or UDP" << std::endl;
-        sendDataICMP(3, 3, ip->ip_src, packet); //TODO 需要检查
+
+        Buffer ip_packet;
+        ip_packet.insert(ip_packet.end(), packet.begin() + sizeof(ethernet_hdr), packet.end());
+        
+        sendDataICMP(3, 3, ip->ip_dst, ip->ip_src, ip_packet); //TODO 需要检查
 
       }else{
         std::cerr << "Unknown protocol" << std::endl;
@@ -340,7 +334,11 @@ SimpleRouter::handlePacket(const Buffer& packet, const std::string& inIface)
       if(ip->ip_ttl == 0 || ip->ip_ttl == 1){
         std::cerr << "TTL is 0" << std::endl;
         //TODO 附带的data是TTL多少
-        sendDataICMP(11, 0, ip->ip_src, packet);
+
+        Buffer ip_packet;
+        ip_packet.insert(ip_packet.end(), packet.begin() + sizeof(ethernet_hdr), packet.end());
+        
+        sendDataICMP(11, 0, iface->ip, ip->ip_src, ip_packet);
         return;
       }
 
@@ -358,14 +356,14 @@ SimpleRouter::handlePacket(const Buffer& packet, const std::string& inIface)
       packet_forward.insert(packet_forward.end(), (unsigned char*)&ip_forward, (unsigned char*)&ip_forward + sizeof(ip_hdr));
       packet_forward.insert(packet_forward.end(), packet.begin() + sizeof(ethernet_hdr) + sizeof(ip_hdr), packet.end());
       
-      forwardPacket(packet_forward, ip_forward.ip_dst);
+      forwardPacket(packet_forward, iface->ip, ip_forward.ip_dst);
 
     }
   }else {
     std::cerr << "Received unknown packet" << std::endl;
   }
 
-  std::cerr << getRoutingTable() << std::endl;
+  //std::cerr << getRoutingTable() << std::endl;
 
   // FILL THIS IN
 

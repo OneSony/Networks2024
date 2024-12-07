@@ -162,6 +162,10 @@ public:
   std::shared_ptr<ArpRequest>
   queueRequest(uint32_t ip, const Buffer& packet, const std::string& iface);
 
+  std::shared_ptr<ArpRequest>
+  queueRequest_inside(uint32_t ip, const Buffer& packet, const std::string& iface);
+
+
   /*
    * Frees all memory associated with this arp request entry. If this arp request
    * entry is on the arp request queue, it is removed from the queue.

@@ -36,7 +36,7 @@ ArpCache::periodicCheckArpRequestsAndCacheEntries()
   for(auto it = m_cacheEntries.begin(); it != m_cacheEntries.end();) {
     //在调用前已经更新了valid
 
-    std::cerr<<"ARP cache checking " << ipToString((*it)->ip) <<std::endl;
+    //std::cerr<<"ARP cache checking " << ipToString((*it)->ip) <<std::endl;
     if((*it)->isValid == false) {
       it = m_cacheEntries.erase(it);
     }else{
@@ -55,10 +55,99 @@ ArpCache::periodicCheckArpRequestsAndCacheEntries()
           std::cerr<<"ARP request timeout"<<std::endl;
 
           //在本实验中只有ip包会被加入队列, 所以packet一定有ip头
-          const ip_hdr *ip = reinterpret_cast<const ip_hdr*>(packet_it->packet.data() + sizeof(ethernet_hdr));
-          m_router.sendDataICMP(3, 1, ip->ip_src, packet_it->packet);
+          //不能调用内部的函数，因为内部的函数会加锁
+          const ip_hdr *ori_ip = reinterpret_cast<const ip_hdr*>(packet_it->packet.data()); //注意这里没有以太网包头
 
-          //TODO 需要测试
+          //std::cerr << "packet size!!!!!!!!!???"<< packet_it->packet.size() << std::endl;
+
+          auto iface = m_router.findIfaceByName(packet_it->iface);
+          
+          std::cerr<<"ICMP host unreachable:"<< "src " << ipToString(iface->ip) << " dst " << ipToString(ori_ip->ip_src) <<std::endl;
+          
+          uint32_t src_ip = iface->ip;
+          uint32_t dst_ip = ori_ip->ip_src;
+
+          icmp_data_hdr icmp;
+          icmp.icmp_type = 3;
+          icmp.icmp_code = 1;
+          icmp.icmp_sum = 0;
+          icmp.unused = 0;
+
+          memcpy(icmp.data, ori_ip, sizeof(ip_hdr));
+          //std::cerr<<"!!!!!!:::ip size"<<sizeof(ip_hdr)<<std::endl;
+          print_hdr_ip(icmp.data);
+
+          size_t ip_payload_size = ntohs(ori_ip->ip_len) - sizeof(ip_hdr);
+          //std::cerr<<"!!!!!!:::ip_payload_size"<<ip_payload_size<<std::endl;
+          size_t copy_size = (ip_payload_size < 8) ? ip_payload_size : 8;
+          //std::cerr<<"!!!!!!:::copy_size"<<copy_size<<std::endl;
+          memcpy(icmp.data + sizeof(ip_hdr), packet_it->packet.data() + sizeof(ip_hdr), copy_size);
+
+          if (ip_payload_size < 8) {
+            memset(icmp.data + sizeof(ip_hdr) + copy_size, 0, 8 - copy_size);
+          }
+
+          icmp.icmp_sum = cksum(&icmp, sizeof(icmp_data_hdr)); //TODO checksum对吗
+
+          srand(static_cast<unsigned int>(time(0)));
+          ip_hdr ip;
+          ip.ip_v = 4;
+          ip.ip_hl = 5;
+          ip.ip_tos = 0;
+          ip.ip_len = htons(sizeof(ip_hdr) + sizeof(icmp_data_hdr));
+          ip.ip_off = htons(IP_DF);
+          ip.ip_id = htons(rand() % 65536);
+          ip.ip_ttl = 64;
+          ip.ip_p = ip_protocol_icmp;
+          ip.ip_src = src_ip;
+          ip.ip_dst = dst_ip;
+          ip.ip_sum = 0;
+          ip.ip_sum = cksum(&ip, sizeof(ip_hdr));
+
+          Buffer packet_unreachable;
+          packet_unreachable.insert(packet_unreachable.end(), (unsigned char*)&ip, (unsigned char*)&ip + sizeof(ip_hdr));
+          packet_unreachable.insert(packet_unreachable.end(), (unsigned char*)&icmp, (unsigned char*)&icmp + sizeof(icmp_data_hdr));
+
+          RoutingTableEntry next_hop;
+          try{
+            next_hop = m_router.getRoutingTable().lookup(dst_ip);
+          }catch(std::runtime_error e){
+            std::cerr << "Routing entry not found" << std::endl;
+            //do nothing
+            break;
+          }
+
+          std::shared_ptr<ArpEntry> next_hop_ha = nullptr; //寻找ARP
+          //寻找ARP
+          for (const auto& entry : m_cacheEntries) {
+            if (entry->isValid && entry->ip == next_hop.gw) {
+              next_hop_ha = entry;
+              break;
+            }
+          }
+
+
+          if(next_hop_ha == nullptr){
+            std::cerr << "ARP not found" << std::endl;
+            std::cerr << "store request in " << next_hop.ifName << std::endl;
+
+            queueRequest_inside(next_hop.gw, packet_unreachable, next_hop.ifName);
+          }else{
+            std::cerr << "ARP found" << std::endl;
+
+            ethernet_hdr eth;
+            memcpy(eth.ether_shost, iface->addr.data(), ETHER_ADDR_LEN);
+            memcpy(eth.ether_dhost, next_hop_ha->mac.data(), ETHER_ADDR_LEN);
+            eth.ether_type = htons(ethertype_ip);
+
+            Buffer packet_full;
+            packet_full.insert(packet_full.end(), (unsigned char*)&eth, (unsigned char*)&eth + sizeof(ethernet_hdr));
+            packet_full.insert(packet_full.end(), packet_unreachable.begin(), packet_unreachable.end());
+
+            std::cerr << "sending to " << next_hop.ifName << std::endl;
+            m_router.sendPacket(packet_full, next_hop.ifName);
+          }
+
         }
         //删除这个请求
         it = m_arpRequests.erase(it);
@@ -88,9 +177,9 @@ ArpCache::periodicCheckArpRequestsAndCacheEntries()
         packet_request.insert(packet_request.end(), (unsigned char*)&eth, (unsigned char*)&eth + sizeof(ethernet_hdr));
         packet_request.insert(packet_request.end(), (unsigned char*)&arp_request, (unsigned char*)&arp_request + sizeof(arp_hdr));
 
-        std::cerr<<"ARP request making"<<std::endl;
-        print_hdr_eth(packet_request.data());
-        print_hdr_arp(packet_request.data()+sizeof(ethernet_hdr));
+        //std::cerr<<"ARP request making"<<std::endl;
+        //print_hdr_eth(packet_request.data());
+        //print_hdr_arp(packet_request.data()+sizeof(ethernet_hdr));
 
         m_router.sendPacket(packet_request, iface->name);
 
@@ -138,6 +227,24 @@ std::shared_ptr<ArpRequest>
 ArpCache::queueRequest(uint32_t ip, const Buffer& packet, const std::string& iface)
 {
   std::lock_guard<std::mutex> lock(m_mutex);
+
+  auto request = std::find_if(m_arpRequests.begin(), m_arpRequests.end(),
+                           [ip] (const std::shared_ptr<ArpRequest>& request) {
+                             return (request->ip == ip);
+                           });
+
+  if (request == m_arpRequests.end()) {
+    request = m_arpRequests.insert(m_arpRequests.end(), std::make_shared<ArpRequest>(ip));
+  }
+
+  // Add the packet to the list of packets for this request
+  (*request)->packets.push_back({packet, iface});
+  return *request;
+}
+
+std::shared_ptr<ArpRequest>
+ArpCache::queueRequest_inside(uint32_t ip, const Buffer& packet, const std::string& iface)
+{
 
   auto request = std::find_if(m_arpRequests.begin(), m_arpRequests.end(),
                            [ip] (const std::shared_ptr<ArpRequest>& request) {

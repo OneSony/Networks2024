@@ -107,13 +107,13 @@ public:
 
   // packet需要包括所有的层, 但目的mac可以不写
   void
-  forwardPacket(const Buffer& packet, uint32_t dst_ip);
+  forwardPacket(const Buffer& packet, uint32_t src_ip, uint32_t dst_ip);
 
   void
-  sendDataICMP(int type, int code, uint32_t dst_ip, Buffer ori_packet);
+  sendDataICMP(int type, int code, uint32_t src_ip, uint32_t dst_ip, Buffer ori_packet);
 
   void
-  sendEchoICMP(int type, int code, uint32_t dst_ip, Buffer ori_packet);
+  sendEchoICMP(int type, int code, uint32_t src_ip, uint32_t dst_ip, Buffer ori_packet);
 
 private:
   ArpCache m_arp;
