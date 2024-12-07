@@ -168,10 +168,6 @@ SimpleRouter::handlePacket(const Buffer& packet, const std::string& inIface)
 
 
   const ethernet_hdr *hdr = reinterpret_cast<const ethernet_hdr*>(packet.data());
-
-
-  // to me?
-  //TODO: check if the packet is for me
   
   const Interface* iface = findIfaceByName(inIface);
   
@@ -179,6 +175,13 @@ SimpleRouter::handlePacket(const Buffer& packet, const std::string& inIface)
 
   if (iface == nullptr) {
     std::cerr << "Received packet, but interface is unknown, ignoring" << std::endl;
+    return;
+  }
+
+  if(std::memcmp(hdr->ether_dhost, "\xff\xff\xff\xff\xff\xff", ETHER_ADDR_LEN) == 0 || std::memcmp(hdr->ether_dhost, iface->addr.data(), ETHER_ADDR_LEN) == 0){
+    std::cerr << "Packet is for me" << std::endl;
+  }else{
+    std::cerr << "Packet is not for me" << std::endl;
     return;
   }
 
@@ -330,7 +333,7 @@ SimpleRouter::handlePacket(const Buffer& packet, const std::string& inIface)
         Buffer ip_packet;
         ip_packet.insert(ip_packet.end(), packet.begin() + sizeof(ethernet_hdr), packet.end());
         
-        sendDataICMP(3, 3, ip->ip_dst, ip->ip_src, ip_packet); //TODO 需要检查
+        sendDataICMP(3, 3, ip->ip_dst, ip->ip_src, ip_packet);
 
       }else{
         std::cerr << "Unknown protocol" << std::endl;
