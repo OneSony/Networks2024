@@ -112,7 +112,7 @@ ArpCache::periodicCheckArpRequestsAndCacheEntries()
           try{
             next_hop = m_router.getRoutingTable().lookup(dst_ip);
           }catch(std::runtime_error e){
-            std::cerr << "Routing entry not found" << std::endl;
+            std::cerr << "Routing entry not found arp cache" << std::endl;
             //do nothing
             break;
           }

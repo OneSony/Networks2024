@@ -28,16 +28,23 @@ namespace simple_router {
 void SimpleRouter::forwardPacket(const Buffer& packet, uint32_t src_ip, uint32_t dst_ip) { //这里添加以太网表头
   
   //src_ip用来构建ICMP
-  
+
+  auto is_myself = findIfaceByIp(dst_ip);
+  if (is_myself != nullptr) {
+    std::cerr << "To myself " << is_myself->name << std::endl;
+    return;
+  }
+
   RoutingTableEntry next_hop;    
   try{
     next_hop = m_routingTable.lookup(dst_ip);
   }catch(std::runtime_error e){
-    std::cerr << "Routing entry not found" << std::endl;
-    ip_hdr* ip = reinterpret_cast<ip_hdr*>(const_cast<unsigned char*>(packet.data() + sizeof(ethernet_hdr)));
+    std::cerr << "Routing entry not found forward packet" << std::endl;
+    ip_hdr* ip = reinterpret_cast<ip_hdr*>(const_cast<unsigned char*>(packet.data()));
 
-    //TODO 这里有问题TODO 这里的packet是不是不包含以太网表头
-    sendDataICMP(3, 1, src_ip, ip->ip_src, packet); //TODO 发给自己可以吗，应该是可以
+    //这里的packet是不是不包含以太网表头
+    std::cerr << "ICMP host unreachable:" << "src " << ipToString(src_ip) << " dst " << ipToString(ip->ip_src) << std::endl;
+    sendDataICMP(3, 1, src_ip, ip->ip_src, packet);
     return;
   }
 

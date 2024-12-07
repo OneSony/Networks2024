@@ -67,7 +67,7 @@ RoutingTable::lookup(uint32_t ip) const
     return longest_entry;
   }
   else{
-    throw std::runtime_error("Routing entry not found");
+    throw std::runtime_error("Routing entry not found table lookup");
   }
 }
 //////////////////////////////////////////////////////////////////////////
